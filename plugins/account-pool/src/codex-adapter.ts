@@ -260,7 +260,7 @@ export function createCodexAdapter(options: {
   usageUrl: string;
   importCredentials?: () => Promise<ImportedCodexCredentials>;
 }): ProviderAdapter {
-  const fundedAccounts = new Map<string, boolean>();
+  const fundedAccounts = new Map<string, boolean | null>();
   return {
     provider: "codex",
     upstreamName: "ChatGPT",
@@ -370,9 +370,10 @@ export function createCodexAdapter(options: {
       const parsedCredits = creditsResponseSchema.safeParse(payload);
       const credits = parsedCredits.success ? parsedCredits.data.credits : null;
       const funded =
-        credits != null &&
-        (credits.has_credits || credits.unlimited === true) &&
-        credits.overage_limit_reached !== true;
+        credits == null
+          ? null
+          : (credits.has_credits || credits.unlimited === true) &&
+            credits.overage_limit_reached !== true;
       const previouslyFunded = fundedAccounts.get(context.account.id);
       fundedAccounts.set(context.account.id, funded);
       const quota = codexQuotaFromUsage(
@@ -384,7 +385,7 @@ export function createCodexAdapter(options: {
       if (quota !== null)
         context.quotas.put({
           ...quota,
-          heldUntil: funded && previouslyFunded === false ? null : quota.heldUntil,
+          heldUntil: funded === true && previouslyFunded === false ? null : quota.heldUntil,
         });
     },
     errorResponse(status, message, headers) {
