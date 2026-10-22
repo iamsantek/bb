@@ -77,6 +77,7 @@ export interface ProviderAdapter {
     now: number,
   ): AccountQuota;
   isQuotaRejection(headers: Headers): boolean;
+  hasCredits?(accountId: string): boolean;
   refreshSecret(
     context: AdapterSecretContext,
   ): Promise<{ secret: AccountSecret; refreshed: boolean }>;

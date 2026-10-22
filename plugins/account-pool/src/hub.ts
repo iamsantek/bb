@@ -270,13 +270,23 @@ export class AccountPoolHub {
       hosts: await this.options.hubTokens.list(),
       accounts: accounts.map((account) => {
         const quota = this.options.quotas.get(account.id);
+        const status = accountStatus(
+          account,
+          quota,
+          settings.switchThreshold,
+          now,
+        );
         const { accountId: _accountId, ...quotaFields } = quota;
         return {
           ...account,
           lastUsedHostName: null,
           ...quotaFields,
           inFlight: this.inFlightByAccount.get(account.id) ?? 0,
-          status: accountStatus(account, quota, settings.switchThreshold, now),
+          status:
+            status === "exhausted" &&
+            this.adapter(account.provider).hasCredits?.(account.id) === true
+              ? "ready"
+              : status,
         };
       }),
     };
@@ -442,6 +452,34 @@ export class AccountPoolHub {
           }
           if (response.status === 429) {
             if (adapter.isQuotaRejection(response.headers)) {
+              if (adapter.hasCredits?.(selected.account.id) === true) {
+                const now = this.options.now();
+                const resetAt = blockingResetAt(
+                  observed,
+                  family,
+                  this.options.getSettings().switchThreshold,
+                  now,
+                );
+                const heldUntil = Math.max(
+                  resetAt ?? now + 60_000,
+                  now +
+                    retryAfterMilliseconds(
+                      response.headers.get("retry-after"),
+                      now,
+                    ),
+                );
+                this.options.quotas.put({ ...observed, heldUntil });
+                failure = {
+                  status: 429,
+                  message: await this.discardUpstream(upstream, true),
+                  headers: {
+                    "retry-after": String(
+                      Math.ceil((heldUntil - now) / 1_000),
+                    ),
+                  },
+                };
+                break;
+              }
               await this.discardUpstream(upstream, false);
               break;
             }
@@ -676,16 +714,29 @@ export class AccountPoolHub {
     signal.throwIfAborted();
     const now = this.options.now();
     const threshold = this.options.getSettings().switchThreshold;
-    const available = accounts
+    const adapter = this.adapter(provider);
+    const usable = accounts
       .filter((account) => account.provider === provider && account.enabled)
       .map((account) => ({
         account,
         quota: this.options.quotas.get(account.id),
       }))
-      .filter(({ quota }) => quota.error === null)
-      .filter(({ quota }) => !isSharedQuotaExhausted(quota, threshold, now));
+      .filter(({ quota }) => quota.error === null);
+    const useCredits = !usable.some(
+      ({ account, quota }) =>
+        candidateIds.has(account.id) &&
+        !attempted.has(account.id) &&
+        !isQuotaExhausted(quota, family, threshold, now),
+    );
+    const funded = (account: Account) =>
+      useCredits && adapter.hasCredits?.(account.id) === true;
+    const available = usable.filter(
+      ({ account, quota }) =>
+        funded(account) || !isSharedQuotaExhausted(quota, threshold, now),
+    );
     const eligible = available.filter(
-      ({ quota }) => !isQuotaExhausted(quota, family, threshold, now),
+      ({ account, quota }) =>
+        funded(account) || !isQuotaExhausted(quota, family, threshold, now),
     );
     const unattempted = eligible.filter(
       ({ account }) =>

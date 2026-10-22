@@ -100,6 +100,12 @@ family without moving the session's main pin or the provider cursor. The cursor
 and session pins survive hub restarts. Session pins expire after 30 idle minutes,
 and the pool retains the 4,096 most recently used pins.
 
+Codex accounts remain usable beyond the switch threshold when OpenAI reports
+available credits and no overage limit. The pool uses accounts with remaining
+included quota first, then accounts with credits. Credit availability refreshes
+with usage, and a provider quota rejection places the account on hold.
+An account with credits appears as `ready` while its included usage stays visible.
+
 Use the up/down arrows in Account Pooler settings, or
 `bb pool account reorder <claude|codex> <id>...`, to set the complete order for
 one provider. Include disabled accounts too. Reordering changes the next failover

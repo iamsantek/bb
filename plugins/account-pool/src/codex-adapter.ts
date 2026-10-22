@@ -194,6 +194,16 @@ const usageResponseSchema = z
   })
   .passthrough();
 
+const creditsResponseSchema = z.object({
+  credits: z
+    .object({
+      has_credits: z.boolean(),
+      unlimited: z.boolean().optional(),
+      overage_limit_reached: z.boolean().optional(),
+    })
+    .nullish(),
+});
+
 function windowFromUsage(
   slot: LimitWindowSlot,
   value: z.infer<typeof usageWindowSchema> | null | undefined,
@@ -250,9 +260,11 @@ export function createCodexAdapter(options: {
   usageUrl: string;
   importCredentials?: () => Promise<ImportedCodexCredentials>;
 }): ProviderAdapter {
+  const fundedAccounts = new Set<string>();
   return {
     provider: "codex",
     upstreamName: "ChatGPT",
+    hasCredits: (accountId) => fundedAccounts.has(accountId),
     async importAccount() {
       const imported = await (
         options.importCredentials ?? importCodexCredentials
@@ -354,13 +366,27 @@ export function createCodexAdapter(options: {
         await response.body?.cancel();
         return;
       }
+      const payload: unknown = await response.json().catch(() => null);
+      const parsedCredits = creditsResponseSchema.safeParse(payload);
+      const credits = parsedCredits.success ? parsedCredits.data.credits : null;
+      const funded =
+        credits != null &&
+        (credits.has_credits || credits.unlimited === true) &&
+        credits.overage_limit_reached !== true;
+      const previouslyFunded = fundedAccounts.has(context.account.id);
+      if (funded) fundedAccounts.add(context.account.id);
+      else fundedAccounts.delete(context.account.id);
       const quota = codexQuotaFromUsage(
         context.account.id,
-        await response.json().catch(() => null),
+        payload,
         context.quotas.get(context.account.id),
         context.now(),
       );
-      if (quota !== null) context.quotas.put(quota);
+      if (quota !== null)
+        context.quotas.put({
+          ...quota,
+          heldUntil: funded && !previouslyFunded ? null : quota.heldUntil,
+        });
     },
     errorResponse(status, message, headers) {
       return Response.json(
