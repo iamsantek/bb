@@ -726,6 +726,7 @@ export class AccountPoolHub {
       ({ account, quota }) =>
         candidateIds.has(account.id) &&
         !attempted.has(account.id) &&
+        (quota.heldUntil === null || quota.heldUntil <= now) &&
         !isQuotaExhausted(quota, family, threshold, now),
     );
     const funded = (account: Account) =>
