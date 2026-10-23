@@ -9,6 +9,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sdk } from "@/lib/sdk";
 import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
+import { makeSystemConfig } from "@/test/fixtures/system-config";
 import { makeThreadResponse } from "@/test/fixtures/thread-responses";
 import type {
   ProviderModelCatalogScope,
@@ -45,7 +46,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/sdk", () => ({
   sdk: {
+    hosts: {
+      list: vi.fn(),
+    },
     system: {
+      config: vi.fn(),
       executionOptions: vi.fn(),
       providerStates: vi.fn(),
     },
@@ -57,6 +62,7 @@ vi.mock("@/lib/sdk", () => ({
 }));
 
 vi.mock("@/hooks/useRealtimeSubscription", () => ({
+  useHostListRealtimeSubscription: vi.fn(),
   useSystemRealtimeSubscription: vi.fn(),
   useThreadDetailRealtimeSubscription: vi.fn(),
 }));
@@ -348,6 +354,8 @@ function setProjectScopedValue(baseKey: string, value: string): void {
 
 beforeEach(() => {
   window.sessionStorage.clear();
+  vi.mocked(sdk.hosts.list).mockResolvedValue([]);
+  vi.mocked(sdk.system.config).mockResolvedValue(makeSystemConfig());
   mocks.updateThreadMutateAsync.mockResolvedValue(makeThreadResponse());
   vi.mocked(sdk.system.executionOptions).mockResolvedValue(
     executionOptionsResponse(),
