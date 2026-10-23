@@ -92,9 +92,7 @@ function seedProviderThreadFixture(
   const thread = seedThread(args.harness.deps, {
     projectId: project.id,
     environmentId: environment.id,
-    ...(args.providerId === undefined
-      ? {}
-      : { providerId: args.providerId }),
+    ...(args.providerId === undefined ? {} : { providerId: args.providerId }),
     status: args.status ?? "idle",
   });
   seedThreadRuntimeState(args.harness.deps, {

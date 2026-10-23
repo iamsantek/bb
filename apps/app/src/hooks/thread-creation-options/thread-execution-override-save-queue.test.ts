@@ -154,9 +154,8 @@ describe("thread execution override save queue", () => {
       });
 
       await modelStarted;
-      const failedModelAssertion = expect(failedModel).rejects.toThrow(
-        "model save failed",
-      );
+      const failedModelAssertion =
+        expect(failedModel).rejects.toThrow("model save failed");
       rejectModelSave(new Error("model save failed"));
       modelSaveRejected = true;
       await failedModelAssertion;

@@ -253,10 +253,7 @@ export function useThreadCreationOptions(
   const pendingThreadExecutionOverride = useSyncExternalStore(
     (listener) =>
       persistToThreadId
-        ? subscribeToPendingThreadExecutionOverride(
-            persistToThreadId,
-            listener,
-          )
+        ? subscribeToPendingThreadExecutionOverride(persistToThreadId, listener)
         : () => {},
     () =>
       persistToThreadId
@@ -329,7 +326,8 @@ export function useThreadCreationOptions(
           }
         },
         {
-          retainUntilCanonical: queryClient.getQueryState(queryKey) !== undefined,
+          retainUntilCanonical:
+            queryClient.getQueryState(queryKey) !== undefined,
           getCanonicalReadVersion: () =>
             getThreadExecutionOptionsCanonicalReadVersion(persistToThreadId),
           onSaved: () => {
@@ -370,8 +368,7 @@ export function useThreadCreationOptions(
     useState<ThreadPromptSelections>(() =>
       getInitialThreadPromptSelections({
         initialEnvironmentSelectionValue,
-        initialModel:
-          pendingThreadExecutionOverride?.model ?? initialModel,
+        initialModel: pendingThreadExecutionOverride?.model ?? initialModel,
         initialProviderId,
         initialPermissionMode,
         initialReasoningLevel:
@@ -402,8 +399,7 @@ export function useThreadCreationOptions(
     () =>
       getInitialThreadPromptSelections({
         initialEnvironmentSelectionValue,
-        initialModel:
-          pendingThreadExecutionOverride?.model ?? initialModel,
+        initialModel: pendingThreadExecutionOverride?.model ?? initialModel,
         initialProviderId,
         initialPermissionMode,
         initialReasoningLevel:
@@ -431,19 +427,35 @@ export function useThreadCreationOptions(
     if (previous.threadId !== persistToThreadId || previous.patch === null) {
       return;
     }
-    const modelWasRemoved =
-      "model" in previous.patch &&
-      !(pendingThreadExecutionOverride !== null &&
-        "model" in pendingThreadExecutionOverride);
+    const pendingHasModel =
+      pendingThreadExecutionOverride !== null &&
+      "model" in pendingThreadExecutionOverride;
+    const pendingHasReasoningLevel =
+      pendingThreadExecutionOverride !== null &&
+      "reasoningLevel" in pendingThreadExecutionOverride;
+    const pendingHasServiceTier =
+      pendingThreadExecutionOverride !== null &&
+      "serviceTier" in pendingThreadExecutionOverride;
+    const previousHasModel = "model" in previous.patch;
+    const previousHasReasoningLevel = "reasoningLevel" in previous.patch;
+    const previousHasServiceTier = "serviceTier" in previous.patch;
+    const modelChanged =
+      previousHasModel !== pendingHasModel ||
+      previous.patch.model !== pendingThreadExecutionOverride?.model;
+    const reasoningLevelChanged =
+      previousHasReasoningLevel !== pendingHasReasoningLevel ||
+      previous.patch.reasoningLevel !==
+        pendingThreadExecutionOverride?.reasoningLevel;
+    const serviceTierChanged =
+      previousHasServiceTier !== pendingHasServiceTier ||
+      previous.patch.serviceTier !==
+        pendingThreadExecutionOverride?.serviceTier;
+    const modelWasRemoved = previousHasModel && !pendingHasModel;
     const reasoningWasRemoved =
-      "reasoningLevel" in previous.patch &&
-      !(pendingThreadExecutionOverride !== null &&
-        "reasoningLevel" in pendingThreadExecutionOverride);
+      previousHasReasoningLevel && !pendingHasReasoningLevel;
     const serviceTierWasRemoved =
-      "serviceTier" in previous.patch &&
-      !(pendingThreadExecutionOverride !== null &&
-        "serviceTier" in pendingThreadExecutionOverride);
-    if (!modelWasRemoved && !reasoningWasRemoved && !serviceTierWasRemoved) {
+      previousHasServiceTier && !pendingHasServiceTier;
+    if (!modelChanged && !reasoningLevelChanged && !serviceTierChanged) {
       return;
     }
     if (modelWasRemoved) {
@@ -461,18 +473,41 @@ export function useThreadCreationOptions(
     ) {
       localProviderSelectionsRef.current.delete(initialProviderId);
     }
-    setThreadSelections((currentSelections) =>
-      syncUntouchedThreadPromptSelections({
-        currentSelections,
-        nextSelections: nextThreadSelections,
-        touchedFields: touchedThreadFieldsRef.current,
-      }),
-    );
+    const currentWithChangedPendingSelections = {
+      ...threadSelections,
+      ...(modelChanged && pendingHasModel
+        ? { selectedModel: nextThreadSelections.selectedModel }
+        : {}),
+      ...(reasoningLevelChanged && pendingHasReasoningLevel
+        ? { reasoningLevel: nextThreadSelections.reasoningLevel }
+        : {}),
+      ...(serviceTierChanged && pendingHasServiceTier
+        ? { serviceTier: nextThreadSelections.serviceTier }
+        : {}),
+    };
+    const syncedSelections = syncUntouchedThreadPromptSelections({
+      currentSelections: currentWithChangedPendingSelections,
+      nextSelections: nextThreadSelections,
+      touchedFields: touchedThreadFieldsRef.current,
+    });
+    if (
+      initialProviderId !== undefined &&
+      !modelWasRemoved &&
+      !reasoningWasRemoved &&
+      (modelChanged || reasoningLevelChanged)
+    ) {
+      localProviderSelectionsRef.current.set(initialProviderId, {
+        model: syncedSelections.selectedModel,
+        reasoningLevel: syncedSelections.reasoningLevel,
+      });
+    }
+    setThreadSelections(syncedSelections);
   }, [
     initialProviderId,
     nextThreadSelections,
     pendingThreadExecutionOverride,
     persistToThreadId,
+    threadSelections,
   ]);
   const renderedThreadSelections = useMemo(() => {
     if (!usesLocalThreadSelections) {
@@ -766,61 +801,58 @@ export function useThreadCreationOptions(
     effectiveProviderId === readyProviderId
       ? "client-preference"
       : undefined;
-  const executionInputSources = useMemo(
-    () => {
-      const touchedFields = touchedFieldsPendingReset
-        ? new Set<ThreadPromptField>()
-        : new Set(touchedThreadFieldsRef.current);
-      if (pendingThreadExecutionOverride !== null) {
-        if ("model" in pendingThreadExecutionOverride) {
-          touchedFields.add("selectedModel");
-        }
-        if ("reasoningLevel" in pendingThreadExecutionOverride) {
-          touchedFields.add("reasoningLevel");
-        }
-        if ("serviceTier" in pendingThreadExecutionOverride) {
-          touchedFields.add("serviceTier");
-        }
+  const executionInputSources = useMemo(() => {
+    const touchedFields = touchedFieldsPendingReset
+      ? new Set<ThreadPromptField>()
+      : new Set(touchedThreadFieldsRef.current);
+    if (pendingThreadExecutionOverride !== null) {
+      if ("model" in pendingThreadExecutionOverride) {
+        touchedFields.add("selectedModel");
       }
-      return buildExecutionInputSources({
-        effectiveValues: {
-          selectedProviderId: effectiveProviderId,
-          selectedModel,
-          serviceTier,
-          reasoningLevel,
-          permissionMode,
-        },
-        forceExplicitModel: isUnavailableModelRecovery,
-        initialProviderSource: effectiveInitialProviderSource,
-        scope,
-        storedValues: {
-          selectedProviderId: storedProviderId,
-          selectedModel: storedSelectedModel,
-          serviceTier: storedServiceTier,
-          reasoningLevel: storedReasoningLevel,
-          permissionMode: storedPermissionMode,
-        },
-        touchedFields,
-      });
-    },
-    [
-      effectiveProviderId,
-      effectiveInitialProviderSource,
-      isUnavailableModelRecovery,
-      permissionMode,
-      pendingThreadExecutionOverride,
-      reasoningLevel,
+      if ("reasoningLevel" in pendingThreadExecutionOverride) {
+        touchedFields.add("reasoningLevel");
+      }
+      if ("serviceTier" in pendingThreadExecutionOverride) {
+        touchedFields.add("serviceTier");
+      }
+    }
+    return buildExecutionInputSources({
+      effectiveValues: {
+        selectedProviderId: effectiveProviderId,
+        selectedModel,
+        serviceTier,
+        reasoningLevel,
+        permissionMode,
+      },
+      forceExplicitModel: isUnavailableModelRecovery,
+      initialProviderSource: effectiveInitialProviderSource,
       scope,
-      selectedModel,
-      serviceTier,
-      storedPermissionMode,
-      storedProviderId,
-      storedReasoningLevel,
-      storedSelectedModel,
-      storedServiceTier,
-      touchedFieldsPendingReset,
-    ],
-  );
+      storedValues: {
+        selectedProviderId: storedProviderId,
+        selectedModel: storedSelectedModel,
+        serviceTier: storedServiceTier,
+        reasoningLevel: storedReasoningLevel,
+        permissionMode: storedPermissionMode,
+      },
+      touchedFields,
+    });
+  }, [
+    effectiveProviderId,
+    effectiveInitialProviderSource,
+    isUnavailableModelRecovery,
+    permissionMode,
+    pendingThreadExecutionOverride,
+    reasoningLevel,
+    scope,
+    selectedModel,
+    serviceTier,
+    storedPermissionMode,
+    storedProviderId,
+    storedReasoningLevel,
+    storedSelectedModel,
+    storedServiceTier,
+    touchedFieldsPendingReset,
+  ]);
 
   useLayoutEffect(() => {
     if (!usesLocalThreadSelections) return;

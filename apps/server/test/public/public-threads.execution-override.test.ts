@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  getThreadExecutionOverride,
-  setThreadExecutionOverride,
-} from "@bb/db";
+import { getThreadExecutionOverride, setThreadExecutionOverride } from "@bb/db";
 import { resolvedThreadExecutionOptionsSchema } from "@bb/domain";
 import {
   registerHostRpcResponder,
@@ -158,10 +155,11 @@ describe("PATCH /threads/:id execution override", () => {
 
   it("keeps model, reasoning, and service-tier choices per thread across reloads", async () => {
     await withTestHarness(async (harness) => {
-      const { host, session, thread: threadA } = seedProviderThread(
-        harness,
-        "codex",
-      );
+      const {
+        host,
+        session,
+        thread: threadA,
+      } = seedProviderThread(harness, "codex");
       const threadB = seedThread(harness.deps, {
         projectId: threadA.projectId,
         environmentId: threadA.environmentId,
@@ -208,8 +206,9 @@ describe("PATCH /threads/:id execution override", () => {
         serviceTier: "default",
       });
       expect(fastOff.status).toBe(200);
-      await expect(readDefaultExecutionOptions(harness, threadA.id)).resolves
-        .toMatchObject({ serviceTier: "default" });
+      await expect(
+        readDefaultExecutionOptions(harness, threadA.id),
+      ).resolves.toMatchObject({ serviceTier: "default" });
     });
   });
 
@@ -228,15 +227,17 @@ describe("PATCH /threads/:id execution override", () => {
         serviceTier: "fast",
       });
       expect(fastOn.status).toBe(200);
-      expect(getThreadExecutionOverride(harness.db, codexThread.id))
-        .toMatchObject({ serviceTierOverride: "fast" });
+      expect(
+        getThreadExecutionOverride(harness.db, codexThread.id),
+      ).toMatchObject({ serviceTierOverride: "fast" });
 
       const fastOff = await patchThread(harness, codexThread.id, {
         serviceTier: "default",
       });
       expect(fastOff.status).toBe(200);
-      expect(getThreadExecutionOverride(harness.db, codexThread.id))
-        .toMatchObject({ serviceTierOverride: "default" });
+      expect(
+        getThreadExecutionOverride(harness.db, codexThread.id),
+      ).toMatchObject({ serviceTierOverride: "default" });
 
       const {
         host: piHost,
@@ -254,8 +255,9 @@ describe("PATCH /threads/:id execution override", () => {
       expect(JSON.stringify(await readJson(unsupportedFast))).toContain(
         "does not support the Fast service tier",
       );
-      expect(getThreadExecutionOverride(harness.db, piThread.id))
-        .toMatchObject({ serviceTierOverride: null });
+      expect(getThreadExecutionOverride(harness.db, piThread.id)).toMatchObject(
+        { serviceTierOverride: null },
+      );
       expect(codexResponder.requests).toHaveLength(0);
       expect(piResponder.requests).toHaveLength(0);
       codexResponder.unregister();

@@ -11,8 +11,10 @@ type ThreadExecutionOverrideField = keyof ThreadExecutionOverridePatch;
 interface PendingThreadExecutionOverride {
   patch: ThreadExecutionOverridePatch;
   revisions: Partial<Record<ThreadExecutionOverrideField, number>>;
-  awaitingCanonical: Partial<Record<ThreadExecutionOverrideField, number>>;
-  awaitingCanonicalAfter: Partial<Record<ThreadExecutionOverrideField, number>>;
+  successfulPatch: ThreadExecutionOverridePatch;
+  successfulRevisions: Partial<Record<ThreadExecutionOverrideField, number>>;
+  successfulAfter: Partial<Record<ThreadExecutionOverrideField, number>>;
+  retainSuccessfulUntilCanonical: boolean;
   pendingSaves: number;
 }
 
@@ -30,6 +32,10 @@ const pendingOverridesByThreadId = new Map<
 >();
 const listenersByThreadId = new Map<string, Set<() => void>>();
 const canonicalReadVersionsByThreadId = new Map<string, number>();
+const pendingOverrideSnapshots = new WeakMap<
+  PendingThreadExecutionOverride,
+  ThreadExecutionOverridePatch | null
+>();
 let nextSaveRevision = 0;
 
 function notifyPendingOverrideListeners(threadId: string): void {
@@ -41,8 +47,14 @@ function notifyPendingOverrideListeners(threadId: string): void {
 export function getPendingThreadExecutionOverride(
   threadId: string,
 ): ThreadExecutionOverridePatch | null {
-  const patch = pendingOverridesByThreadId.get(threadId)?.patch;
-  return patch === undefined || Object.keys(patch).length === 0 ? null : patch;
+  const current = pendingOverridesByThreadId.get(threadId);
+  if (current === undefined) return null;
+  const snapshot = pendingOverrideSnapshots.get(current);
+  if (snapshot !== undefined) return snapshot;
+  const patch = { ...current.successfulPatch, ...current.patch };
+  const nextSnapshot = Object.keys(patch).length === 0 ? null : patch;
+  pendingOverrideSnapshots.set(current, nextSnapshot);
+  return nextSnapshot;
 }
 
 export function getThreadExecutionOptionsCanonicalReadVersion(
@@ -55,8 +67,7 @@ export function recordThreadExecutionOptionsCanonicalRead(
   threadId: string,
 ): number {
   if (!pendingOverridesByThreadId.has(threadId)) return 0;
-  const nextVersion =
-    (canonicalReadVersionsByThreadId.get(threadId) ?? 0) + 1;
+  const nextVersion = (canonicalReadVersionsByThreadId.get(threadId) ?? 0) + 1;
   canonicalReadVersionsByThreadId.set(threadId, nextVersion);
   return nextVersion;
 }
@@ -83,18 +94,19 @@ export function enqueueThreadExecutionOverrideSave<TResult>(
   const current = pendingOverridesByThreadId.get(threadId);
   const revision = ++nextSaveRevision;
   const revisions = { ...current?.revisions };
-  const awaitingCanonical = { ...current?.awaitingCanonical };
-  const awaitingCanonicalAfter = { ...current?.awaitingCanonicalAfter };
+  const retainSuccessfulUntilCanonical =
+    (current?.retainSuccessfulUntilCanonical ?? false) ||
+    (options.retainUntilCanonical ?? false);
   for (const field of Object.keys(patch) as ThreadExecutionOverrideField[]) {
     revisions[field] = revision;
-    delete awaitingCanonical[field];
-    delete awaitingCanonicalAfter[field];
   }
   pendingOverridesByThreadId.set(threadId, {
     patch: { ...current?.patch, ...patch },
     revisions,
-    awaitingCanonical,
-    awaitingCanonicalAfter,
+    successfulPatch: { ...current?.successfulPatch },
+    successfulRevisions: { ...current?.successfulRevisions },
+    successfulAfter: { ...current?.successfulAfter },
+    retainSuccessfulUntilCanonical,
     pendingSaves: (current?.pendingSaves ?? 0) + 1,
   });
   notifyPendingOverrideListeners(threadId);
@@ -120,7 +132,10 @@ export function enqueueThreadExecutionOverrideSave<TResult>(
       throw error;
     },
   );
-  const settled = trackedOperation.then(() => undefined, () => undefined);
+  const settled = trackedOperation.then(
+    () => undefined,
+    () => undefined,
+  );
   pendingSavesByThreadId.set(threadId, settled);
   void settled.then(() => {
     if (pendingSavesByThreadId.get(threadId) === settled) {
@@ -136,51 +151,58 @@ function settlePendingOverride(
   revision: number,
   failed: boolean,
   retainUntilCanonical: boolean,
-  canonicalDataUpdateCount: number,
+  canonicalReadVersion: number,
 ): void {
   const current = pendingOverridesByThreadId.get(threadId);
   if (current === undefined) return;
-  let nextPatch = current.patch;
-  let nextRevisions = current.revisions;
-  let nextAwaitingCanonical = current.awaitingCanonical;
-  let nextAwaitingCanonicalAfter = current.awaitingCanonicalAfter;
+  const nextPatch = { ...current.patch };
+  const nextRevisions = { ...current.revisions };
+  const nextSuccessfulPatch = { ...current.successfulPatch };
+  const nextSuccessfulRevisions = { ...current.successfulRevisions };
+  const nextSuccessfulAfter = { ...current.successfulAfter };
   if (failed) {
-    nextPatch = { ...current.patch };
-    nextRevisions = { ...current.revisions };
-    nextAwaitingCanonical = { ...current.awaitingCanonical };
-    nextAwaitingCanonicalAfter = { ...current.awaitingCanonicalAfter };
     for (const field of Object.keys(patch) as ThreadExecutionOverrideField[]) {
       if (current.revisions[field] !== revision) continue;
       delete nextPatch[field];
       delete nextRevisions[field];
-      delete nextAwaitingCanonical[field];
-      delete nextAwaitingCanonicalAfter[field];
     }
-  } else if (retainUntilCanonical) {
-    nextAwaitingCanonical = { ...current.awaitingCanonical };
-    nextAwaitingCanonicalAfter = { ...current.awaitingCanonicalAfter };
+  } else {
     for (const field of Object.keys(patch) as ThreadExecutionOverrideField[]) {
+      nextSuccessfulPatch[field] = patch[field];
+      nextSuccessfulRevisions[field] = revision;
+      nextSuccessfulAfter[field] = canonicalReadVersion;
       if (current.revisions[field] === revision) {
-        nextAwaitingCanonical[field] = revision;
-        nextAwaitingCanonicalAfter[field] = canonicalDataUpdateCount;
+        delete nextPatch[field];
+        delete nextRevisions[field];
       }
     }
-  } else if (current.pendingSaves === 1) {
-    pendingOverridesByThreadId.delete(threadId);
-    canonicalReadVersionsByThreadId.delete(threadId);
-    notifyPendingOverrideListeners(threadId);
-    return;
   }
   const pendingSaves = current.pendingSaves - 1;
-  if (pendingSaves === 0 && Object.keys(nextPatch).length === 0) {
+  if (pendingSaves === 0 && !current.retainSuccessfulUntilCanonical) {
+    for (const field of Object.keys(
+      nextSuccessfulPatch,
+    ) as ThreadExecutionOverrideField[]) {
+      delete nextSuccessfulPatch[field];
+      delete nextSuccessfulRevisions[field];
+      delete nextSuccessfulAfter[field];
+    }
+  }
+  if (
+    pendingSaves === 0 &&
+    Object.keys(nextPatch).length === 0 &&
+    Object.keys(nextSuccessfulPatch).length === 0
+  ) {
     pendingOverridesByThreadId.delete(threadId);
     canonicalReadVersionsByThreadId.delete(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
       patch: nextPatch,
       revisions: nextRevisions,
-      awaitingCanonical: nextAwaitingCanonical,
-      awaitingCanonicalAfter: nextAwaitingCanonicalAfter,
+      successfulPatch: nextSuccessfulPatch,
+      successfulRevisions: nextSuccessfulRevisions,
+      successfulAfter: nextSuccessfulAfter,
+      retainSuccessfulUntilCanonical:
+        current.retainSuccessfulUntilCanonical || retainUntilCanonical,
       pendingSaves,
     });
   }
@@ -197,43 +219,45 @@ export function acknowledgeThreadExecutionOverride(
   if (current === undefined) return;
   const nextPatch = { ...current.patch };
   const nextRevisions = { ...current.revisions };
-  const nextAwaitingCanonical = { ...current.awaitingCanonical };
-  const nextAwaitingCanonicalAfter = { ...current.awaitingCanonicalAfter };
+  const nextSuccessfulPatch = { ...current.successfulPatch };
+  const nextSuccessfulRevisions = { ...current.successfulRevisions };
+  const nextSuccessfulAfter = { ...current.successfulAfter };
   let changed = false;
-  for (const field of Object.keys(nextAwaitingCanonical) as ThreadExecutionOverrideField[]) {
-    const revision = nextAwaitingCanonical[field];
+  for (const field of Object.keys(
+    nextSuccessfulPatch,
+  ) as ThreadExecutionOverrideField[]) {
+    const revision = nextSuccessfulRevisions[field];
     if (revision === undefined) continue;
     if (
       canonicalReadVersion <=
-      (nextAwaitingCanonicalAfter[field] ?? Number.POSITIVE_INFINITY)
+      (nextSuccessfulAfter[field] ?? Number.POSITIVE_INFINITY)
     ) {
       continue;
     }
-    if (current.revisions[field] !== revision) {
-      delete nextAwaitingCanonical[field];
-      delete nextAwaitingCanonicalAfter[field];
-      changed = true;
-      continue;
-    }
-    const expected = nextPatch[field];
+    const expected = nextSuccessfulPatch[field];
     const actual = canonicalOptions[field];
     if (expected !== null && expected !== actual) continue;
-    delete nextPatch[field];
-    delete nextRevisions[field];
-    delete nextAwaitingCanonical[field];
-    delete nextAwaitingCanonicalAfter[field];
+    delete nextSuccessfulPatch[field];
+    delete nextSuccessfulRevisions[field];
+    delete nextSuccessfulAfter[field];
     changed = true;
   }
   if (!changed) return;
-  if (current.pendingSaves === 0 && Object.keys(nextPatch).length === 0) {
+  if (
+    current.pendingSaves === 0 &&
+    Object.keys(nextPatch).length === 0 &&
+    Object.keys(nextSuccessfulPatch).length === 0
+  ) {
     pendingOverridesByThreadId.delete(threadId);
     canonicalReadVersionsByThreadId.delete(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
       patch: nextPatch,
       revisions: nextRevisions,
-      awaitingCanonical: nextAwaitingCanonical,
-      awaitingCanonicalAfter: nextAwaitingCanonicalAfter,
+      successfulPatch: nextSuccessfulPatch,
+      successfulRevisions: nextSuccessfulRevisions,
+      successfulAfter: nextSuccessfulAfter,
+      retainSuccessfulUntilCanonical: current.retainSuccessfulUntilCanonical,
       pendingSaves: current.pendingSaves,
     });
   }
