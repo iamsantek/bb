@@ -313,8 +313,11 @@ describe("useThreadCreationOptions", () => {
     };
     const saved = new Map<string, SavedExecutionOptions>();
     mocks.updateThreadMutateAsync.mockImplementation(
-      async ({ id, ...patch }: { id: string } & SavedExecutionOptions) => {
-        saved.set(id, { ...saved.get(id), ...patch });
+      async ({
+        threadId,
+        ...patch
+      }: { threadId: string } & SavedExecutionOptions) => {
+        saved.set(threadId, { ...saved.get(threadId), ...patch });
       },
     );
     const { wrapper } = createQueryClientTestHarness();
@@ -358,7 +361,7 @@ describe("useThreadCreationOptions", () => {
     act(() => result.current.setServiceTier("default"));
     await waitFor(() => {
       expect(mocks.updateThreadMutateAsync).toHaveBeenLastCalledWith({
-        id: "thread-b",
+        threadId: "thread-b",
         serviceTier: "default",
       });
     });
@@ -370,16 +373,16 @@ describe("useThreadCreationOptions", () => {
       expect(result.current.serviceTier).toBe("fast");
     });
     expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(1, {
-      id: "thread-a",
+      threadId: "thread-a",
       model: "global-remembered",
       reasoningLevel: "medium",
     });
     expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(2, {
-      id: "thread-a",
+      threadId: "thread-a",
       reasoningLevel: "high",
     });
     expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(3, {
-      id: "thread-a",
+      threadId: "thread-a",
       serviceTier: "fast",
     });
     await waitFor(() => {
@@ -402,17 +405,20 @@ describe("useThreadCreationOptions", () => {
     const releaseSaves: Array<() => void> = [];
     mocks.updateThreadMutateAsync.mockImplementation(
       async ({
-        id,
+        threadId,
         ...patch
       }: {
-        id: string;
+        threadId: string;
         model?: string;
         reasoningLevel?: "medium" | "high";
         serviceTier?: "default" | "fast";
       }) =>
         new Promise((resolve) => {
           releaseSaves.push(() => {
-            persisted.set(id, { ...persisted.get(id), ...patch });
+            persisted.set(threadId, {
+              ...persisted.get(threadId),
+              ...patch,
+            });
             resolve(makeThreadResponse());
           });
         }),
@@ -515,7 +521,7 @@ describe("useThreadCreationOptions", () => {
       expect(result.current.serviceTier).toBe("default");
     });
     expect(mocks.updateThreadMutateAsync).toHaveBeenCalledWith({
-      id: "thread-a",
+      threadId: "thread-a",
       serviceTier: "fast",
     });
   });

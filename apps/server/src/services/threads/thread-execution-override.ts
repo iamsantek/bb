@@ -151,12 +151,12 @@ export async function applyThreadExecutionOverride(
     update.serviceTierOverride = patch.serviceTier ?? null;
   }
   if ("model" in patch || "reasoningLevel" in patch) {
+    const models = await loadThreadProviderModels(deps, thread);
     const existing = getThreadExecutionOverride(deps.db, thread.id) ?? {
       modelOverride: null,
       reasoningLevelOverride: null,
       serviceTierOverride: null,
     };
-    const models = await loadThreadProviderModels(deps, thread);
     const next = resolveThreadExecutionOverrideUpdate(deps.providerRegistry, {
       existing,
       patch,

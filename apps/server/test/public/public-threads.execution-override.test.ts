@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { getThreadExecutionOverride } from "@bb/db";
+import {
+  getThreadExecutionOverride,
+  setThreadExecutionOverride,
+} from "@bb/db";
 import { resolvedThreadExecutionOptionsSchema } from "@bb/domain";
 import {
   registerHostRpcResponder,
@@ -317,6 +320,68 @@ describe("PATCH /threads/:id execution override", () => {
         modelOverride: "gpt-5.6-sol",
         reasoningLevelOverride: null,
         serviceTierOverride: "fast",
+      });
+    });
+  });
+
+  it("uses the current reasoning override after catalog validation awaits", async () => {
+    await withTestHarness(async (harness) => {
+      const { host, session, thread } = seedProviderThread(harness, "codex");
+      setThreadExecutionOverride(harness.db, {
+        threadId: thread.id,
+        modelOverride: "gpt-5.6-sol",
+        reasoningLevelOverride: "max",
+      });
+      let markCatalogRequested!: () => void;
+      const catalogRequested = new Promise<void>((resolve) => {
+        markCatalogRequested = resolve;
+      });
+      let releaseCatalog!: () => void;
+      const catalogGate = new Promise<void>((resolve) => {
+        releaseCatalog = resolve;
+      });
+      const responder = registerHostRpcResponder(harness, {
+        hostId: host.id,
+        sessionId: session.id,
+        handle: async (request) => {
+          if (request.command.type !== "provider.list_models") {
+            throw new Error(`Unexpected RPC ${request.command.type}`);
+          }
+          markCatalogRequested();
+          await catalogGate;
+          return {
+            ok: true,
+            result: {
+              models: [
+                availableModelFixture({
+                  model: "gpt-5.4-mini",
+                  reasoningLevels: ["low", "medium", "high"],
+                  defaultReasoningLevel: "medium",
+                }),
+              ],
+              selectedOnlyModels: [],
+            },
+          };
+        },
+      });
+
+      const modelUpdate = patchThread(harness, thread.id, {
+        model: "gpt-5.4-mini",
+      });
+      await catalogRequested;
+      setThreadExecutionOverride(harness.db, {
+        threadId: thread.id,
+        reasoningLevelOverride: "low",
+      });
+      releaseCatalog();
+      const response = await modelUpdate;
+      responder.unregister();
+
+      expect(response.status).toBe(200);
+      expect(getThreadExecutionOverride(harness.db, thread.id)).toEqual({
+        modelOverride: "gpt-5.4-mini",
+        reasoningLevelOverride: "low",
+        serviceTierOverride: null,
       });
     });
   });
