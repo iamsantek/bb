@@ -223,8 +223,6 @@ describe("PATCH /threads/:id execution override", () => {
       const codexResponder = registerProviderHostRpcResponder(harness, {
         hostId: codexHost.id,
         sessionId: codexSession.id,
-        providerId: "codex",
-        model: "gpt-5.6-sol",
       });
       const fastOn = await patchThread(harness, codexThread.id, {
         serviceTier: "fast",
@@ -248,8 +246,6 @@ describe("PATCH /threads/:id execution override", () => {
       const piResponder = registerProviderHostRpcResponder(harness, {
         hostId: piHost.id,
         sessionId: piSession.id,
-        providerId: "pi",
-        model: "openai/gpt-5.4",
       });
       const unsupportedFast = await patchThread(harness, piThread.id, {
         serviceTier: "fast",
