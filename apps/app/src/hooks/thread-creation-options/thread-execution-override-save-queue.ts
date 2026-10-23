@@ -44,6 +44,16 @@ function notifyPendingOverrideListeners(threadId: string): void {
   }
 }
 
+function copyThreadExecutionOverrideField<
+  TField extends ThreadExecutionOverrideField,
+>(
+  target: ThreadExecutionOverridePatch,
+  source: ThreadExecutionOverridePatch,
+  field: TField,
+): void {
+  target[field] = source[field];
+}
+
 export function getPendingThreadExecutionOverride(
   threadId: string,
 ): ThreadExecutionOverridePatch | null {
@@ -168,7 +178,7 @@ function settlePendingOverride(
     }
   } else {
     for (const field of Object.keys(patch) as ThreadExecutionOverrideField[]) {
-      nextSuccessfulPatch[field] = patch[field];
+      copyThreadExecutionOverrideField(nextSuccessfulPatch, patch, field);
       nextSuccessfulRevisions[field] = revision;
       nextSuccessfulAfter[field] = canonicalReadVersion;
       if (current.revisions[field] === revision) {
