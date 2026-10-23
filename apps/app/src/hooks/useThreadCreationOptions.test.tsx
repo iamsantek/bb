@@ -467,6 +467,11 @@ describe("useThreadCreationOptions", () => {
     expect(returned.result.current.selectedModel).toBe("global-remembered");
     expect(returned.result.current.reasoningLevel).toBe("high");
     expect(returned.result.current.serviceTier).toBe("fast");
+    expect(returned.result.current.executionInputSources).toMatchObject({
+      model: "explicit",
+      reasoningLevel: "explicit",
+      serviceTier: "explicit",
+    });
 
     await act(async () => {
       releaseSaves[0]?.();
@@ -523,6 +528,104 @@ describe("useThreadCreationOptions", () => {
     expect(mocks.updateThreadMutateAsync).toHaveBeenCalledWith({
       threadId: "thread-a",
       serviceTier: "fast",
+    });
+  });
+
+  it("drops a failed model while a later Fast save remains pending", async () => {
+    vi.mocked(sdk.system.executionOptions).mockImplementation(async (args) =>
+      providerExecutionOptionsResponse(args?.providerId),
+    );
+    let rejectModelSave!: (error: Error) => void;
+    const modelSave = new Promise<ReturnType<typeof makeThreadResponse>>(
+      (_resolve, reject) => {
+        rejectModelSave = reject;
+      },
+    );
+    let resolveTierSave!: (value: ReturnType<typeof makeThreadResponse>) => void;
+    const tierSave = new Promise<ReturnType<typeof makeThreadResponse>>(
+      (resolve) => {
+        resolveTierSave = resolve;
+      },
+    );
+    mocks.updateThreadMutateAsync.mockImplementation(
+      ({
+        threadId,
+        ...patch
+      }: {
+        threadId: string;
+        model?: string;
+        reasoningLevel?: "medium" | "high";
+        serviceTier?: "default" | "fast";
+      }) => {
+        if (patch.model !== undefined) return modelSave;
+        if (patch.serviceTier !== undefined) return tierSave;
+        throw new Error(`unexpected thread update for ${threadId}`);
+      },
+    );
+    const { result } = renderHook(
+      () =>
+        useThreadCreationOptions({
+          scope: "component-local",
+          resetKey: "thread-a",
+          persistToThreadId: "thread-a",
+          initialProviderId: GLOBAL_PROVIDER_ID,
+          initialModel: "global-default",
+          initialReasoningLevel: "medium",
+          initialServiceTier: "default",
+        }),
+      { wrapper: createQueryClientTestHarness().wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe("global-default");
+      expect(result.current.serviceTier).toBe("default");
+    });
+    act(() => {
+      result.current.setSelectedModel("global-remembered");
+      result.current.setServiceTier("fast");
+    });
+    expect(result.current.selectedModel).toBe("global-remembered");
+    expect(result.current.serviceTier).toBe("fast");
+    expect(getPendingThreadExecutionOverride("thread-a")).toEqual({
+      model: "global-remembered",
+      reasoningLevel: "medium",
+      serviceTier: "fast",
+    });
+
+    const failedModelMutation = waitFor(() => {
+      expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    rejectModelSave(new Error("model save failed"));
+    await failedModelMutation;
+    await waitFor(() => {
+      expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(2);
+      expect(getPendingThreadExecutionOverride("thread-a")).toEqual({
+        serviceTier: "fast",
+      });
+      expect(result.current.selectedModel).toBe("global-default");
+      expect(result.current.reasoningLevel).toBe("medium");
+      expect(result.current.serviceTier).toBe("fast");
+    });
+    expect(result.current.executionInputSources).toMatchObject({
+      model: "explicit",
+      reasoningLevel: "explicit",
+      serviceTier: "explicit",
+    });
+    expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(1, {
+      threadId: "thread-a",
+      model: "global-remembered",
+      reasoningLevel: "medium",
+    });
+    expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(2, {
+      threadId: "thread-a",
+      serviceTier: "fast",
+    });
+
+    await act(async () => {
+      resolveTierSave(makeThreadResponse());
+    });
+    await waitFor(() => {
+      expect(getPendingThreadExecutionOverride("thread-a")).toBeNull();
     });
   });
 

@@ -5,8 +5,11 @@ export type ThreadExecutionOverridePatch = Pick<
   "model" | "reasoningLevel" | "serviceTier"
 >;
 
+type ThreadExecutionOverrideField = keyof ThreadExecutionOverridePatch;
+
 interface PendingThreadExecutionOverride {
   patch: ThreadExecutionOverridePatch;
+  revisions: Partial<Record<ThreadExecutionOverrideField, number>>;
   pendingSaves: number;
 }
 
@@ -16,6 +19,7 @@ const pendingOverridesByThreadId = new Map<
   PendingThreadExecutionOverride
 >();
 const listenersByThreadId = new Map<string, Set<() => void>>();
+let nextSaveRevision = 0;
 
 function notifyPendingOverrideListeners(threadId: string): void {
   for (const listener of listenersByThreadId.get(threadId) ?? []) {
@@ -26,7 +30,8 @@ function notifyPendingOverrideListeners(threadId: string): void {
 export function getPendingThreadExecutionOverride(
   threadId: string,
 ): ThreadExecutionOverridePatch | null {
-  return pendingOverridesByThreadId.get(threadId)?.patch ?? null;
+  const patch = pendingOverridesByThreadId.get(threadId)?.patch;
+  return patch === undefined || Object.keys(patch).length === 0 ? null : patch;
 }
 
 export function subscribeToPendingThreadExecutionOverride(
@@ -48,8 +53,14 @@ export function enqueueThreadExecutionOverrideSave<TResult>(
   save: () => Promise<TResult>,
 ): Promise<TResult> {
   const current = pendingOverridesByThreadId.get(threadId);
+  const revision = ++nextSaveRevision;
+  const revisions = { ...current?.revisions };
+  for (const field of Object.keys(patch) as ThreadExecutionOverrideField[]) {
+    revisions[field] = revision;
+  }
   pendingOverridesByThreadId.set(threadId, {
     patch: { ...current?.patch, ...patch },
+    revisions,
     pendingSaves: (current?.pendingSaves ?? 0) + 1,
   });
   notifyPendingOverrideListeners(threadId);
@@ -58,11 +69,11 @@ export function enqueueThreadExecutionOverrideSave<TResult>(
   const operation = previous.catch(() => undefined).then(save);
   const trackedOperation = operation.then(
     (result) => {
-      settlePendingOverride(threadId);
+      settlePendingOverride(threadId, patch, revision, false);
       return result;
     },
     (error: unknown) => {
-      settlePendingOverride(threadId);
+      settlePendingOverride(threadId, patch, revision, true);
       throw error;
     },
   );
@@ -76,14 +87,31 @@ export function enqueueThreadExecutionOverrideSave<TResult>(
   return trackedOperation;
 }
 
-function settlePendingOverride(threadId: string): void {
+function settlePendingOverride(
+  threadId: string,
+  patch: ThreadExecutionOverridePatch,
+  revision: number,
+  failed: boolean,
+): void {
   const current = pendingOverridesByThreadId.get(threadId);
   if (current === undefined) return;
+  let nextPatch = current.patch;
+  let nextRevisions = current.revisions;
+  if (failed) {
+    nextPatch = { ...current.patch };
+    nextRevisions = { ...current.revisions };
+    for (const field of Object.keys(patch) as ThreadExecutionOverrideField[]) {
+      if (current.revisions[field] !== revision) continue;
+      delete nextPatch[field];
+      delete nextRevisions[field];
+    }
+  }
   if (current.pendingSaves === 1) {
     pendingOverridesByThreadId.delete(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
-      ...current,
+      patch: nextPatch,
+      revisions: nextRevisions,
       pendingSaves: current.pendingSaves - 1,
     });
   }

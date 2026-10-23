@@ -97,4 +97,52 @@ describe("thread execution override save queue", () => {
     expect(order).toEqual(["thread-c:failed", "thread-c:next"]);
     expect(getPendingThreadExecutionOverride("thread-c")).toBeNull();
   });
+
+  it("removes a failed field while a disjoint save is still pending", async () => {
+    let rejectModelSave!: (error: Error) => void;
+    const modelSave = new Promise<void>((_resolve, reject) => {
+      rejectModelSave = reject;
+    });
+    let releaseTierSave!: () => void;
+    const tierGate = new Promise<void>((resolve) => {
+      releaseTierSave = resolve;
+    });
+    let markTierStarted!: () => void;
+    const tierStarted = new Promise<void>((resolve) => {
+      markTierStarted = resolve;
+    });
+    const failedModel = enqueueThreadExecutionOverrideSave(
+      "thread-d",
+      { model: "failed-model", reasoningLevel: "high" },
+      () => modelSave,
+    );
+    const pendingTier = enqueueThreadExecutionOverrideSave(
+      "thread-d",
+      { serviceTier: "fast" },
+      async () => {
+        markTierStarted();
+        await tierGate;
+      },
+    );
+
+    expect(getPendingThreadExecutionOverride("thread-d")).toEqual({
+      model: "failed-model",
+      reasoningLevel: "high",
+      serviceTier: "fast",
+    });
+
+    const failedModelAssertion = expect(failedModel).rejects.toThrow(
+      "model save failed",
+    );
+    rejectModelSave(new Error("model save failed"));
+    await failedModelAssertion;
+    await tierStarted;
+    expect(getPendingThreadExecutionOverride("thread-d")).toEqual({
+      serviceTier: "fast",
+    });
+
+    releaseTierSave();
+    await pendingTier;
+    expect(getPendingThreadExecutionOverride("thread-d")).toBeNull();
+  });
 });

@@ -415,25 +415,36 @@ export function useThreadCreationOptions(
       threadId: persistToThreadId,
       patch: pendingThreadExecutionOverride,
     };
-    if (
-      previous.threadId !== persistToThreadId ||
-      previous.patch === null ||
-      pendingThreadExecutionOverride !== null
-    ) {
+    if (previous.threadId !== persistToThreadId || previous.patch === null) {
       return;
     }
-    if ("model" in previous.patch) {
+    const modelWasRemoved =
+      "model" in previous.patch &&
+      !(pendingThreadExecutionOverride !== null &&
+        "model" in pendingThreadExecutionOverride);
+    const reasoningWasRemoved =
+      "reasoningLevel" in previous.patch &&
+      !(pendingThreadExecutionOverride !== null &&
+        "reasoningLevel" in pendingThreadExecutionOverride);
+    const serviceTierWasRemoved =
+      "serviceTier" in previous.patch &&
+      !(pendingThreadExecutionOverride !== null &&
+        "serviceTier" in pendingThreadExecutionOverride);
+    if (!modelWasRemoved && !reasoningWasRemoved && !serviceTierWasRemoved) {
+      return;
+    }
+    if (modelWasRemoved) {
       touchedThreadFieldsRef.current.delete("selectedModel");
     }
-    if ("reasoningLevel" in previous.patch) {
+    if (reasoningWasRemoved) {
       touchedThreadFieldsRef.current.delete("reasoningLevel");
     }
-    if ("serviceTier" in previous.patch) {
+    if (serviceTierWasRemoved) {
       touchedThreadFieldsRef.current.delete("serviceTier");
     }
     if (
       initialProviderId !== undefined &&
-      ("model" in previous.patch || "reasoningLevel" in previous.patch)
+      (modelWasRemoved || reasoningWasRemoved)
     ) {
       localProviderSelectionsRef.current.delete(initialProviderId);
     }
@@ -743,8 +754,22 @@ export function useThreadCreationOptions(
       ? "client-preference"
       : undefined;
   const executionInputSources = useMemo(
-    () =>
-      buildExecutionInputSources({
+    () => {
+      const touchedFields = touchedFieldsPendingReset
+        ? new Set<ThreadPromptField>()
+        : new Set(touchedThreadFieldsRef.current);
+      if (pendingThreadExecutionOverride !== null) {
+        if ("model" in pendingThreadExecutionOverride) {
+          touchedFields.add("selectedModel");
+        }
+        if ("reasoningLevel" in pendingThreadExecutionOverride) {
+          touchedFields.add("reasoningLevel");
+        }
+        if ("serviceTier" in pendingThreadExecutionOverride) {
+          touchedFields.add("serviceTier");
+        }
+      }
+      return buildExecutionInputSources({
         effectiveValues: {
           selectedProviderId: effectiveProviderId,
           selectedModel,
@@ -762,15 +787,15 @@ export function useThreadCreationOptions(
           reasoningLevel: storedReasoningLevel,
           permissionMode: storedPermissionMode,
         },
-        touchedFields: touchedFieldsPendingReset
-          ? new Set<ThreadPromptField>()
-          : touchedThreadFieldsRef.current,
-      }),
+        touchedFields,
+      });
+    },
     [
       effectiveProviderId,
       effectiveInitialProviderSource,
       isUnavailableModelRecovery,
       permissionMode,
+      pendingThreadExecutionOverride,
       reasoningLevel,
       scope,
       selectedModel,
