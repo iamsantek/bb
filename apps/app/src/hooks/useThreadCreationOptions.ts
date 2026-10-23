@@ -261,7 +261,7 @@ export function useThreadCreationOptions(
         : null,
     () => null,
   );
-  const saveThreadExecutionOverride = useMutation({
+  const { mutateAsync: saveThreadExecutionOverrideAsync } = useMutation({
     mutationFn: ({
       id,
       ...patch
@@ -285,7 +285,7 @@ export function useThreadCreationOptions(
         async () => {
           await queryClient.cancelQueries({ queryKey });
           try {
-            await saveThreadExecutionOverride.mutateAsync({
+            await saveThreadExecutionOverrideAsync({
               id: persistToThreadId,
               ...patch,
             });
@@ -343,12 +343,7 @@ export function useThreadCreationOptions(
         },
       ).catch(() => undefined);
     },
-    [
-      persistToThreadId,
-      queryClient,
-      saveThreadExecutionOverride.mutateAsync,
-      scope,
-    ],
+    [persistToThreadId, queryClient, saveThreadExecutionOverrideAsync, scope],
   );
   const { setValue: setStoredProviderId, value: storedProviderId } =
     usePromptBoxProviderPreference();
