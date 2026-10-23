@@ -13,6 +13,7 @@ import type { ProviderModelCatalogScope } from "@bb/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import { hostsQueryKey, systemProvidersQueryKey } from "./queries/query-keys";
 import { getProjectScopedStorageKey } from "@/lib/project-scoped-storage";
+import { getPendingThreadExecutionOverride } from "./thread-creation-options/thread-execution-override-save-queue";
 import { useThreadCreationOptions } from "./useThreadCreationOptions";
 import {
   providerListCacheKey,
@@ -381,6 +382,9 @@ describe("useThreadCreationOptions", () => {
       id: "thread-a",
       serviceTier: "fast",
     });
+    await waitFor(() => {
+      expect(getPendingThreadExecutionOverride("thread-a")).toBeNull();
+    });
   });
 
   it("reuses the latest pending choice when returning to a thread before save completes", async () => {
@@ -437,6 +441,7 @@ describe("useThreadCreationOptions", () => {
     act(() => {
       first.result.current.setSelectedModel("global-remembered");
       first.result.current.setServiceTier("fast");
+      first.result.current.setReasoningLevel("high");
     });
     await waitFor(() => expect(releaseSaves).toHaveLength(1));
     first.unmount();
@@ -454,6 +459,7 @@ describe("useThreadCreationOptions", () => {
       initialProps: { threadId: "thread-a" },
     });
     expect(returned.result.current.selectedModel).toBe("global-remembered");
+    expect(returned.result.current.reasoningLevel).toBe("high");
     expect(returned.result.current.serviceTier).toBe("fast");
 
     await act(async () => {
@@ -463,12 +469,54 @@ describe("useThreadCreationOptions", () => {
     await act(async () => {
       releaseSaves[1]?.();
     });
+    await waitFor(() => expect(releaseSaves).toHaveLength(3));
+    await act(async () => {
+      releaseSaves[2]?.();
+    });
     await waitFor(() => {
       expect(persisted.get("thread-a")).toEqual({
         model: "global-remembered",
-        reasoningLevel: "medium",
+        reasoningLevel: "high",
         serviceTier: "fast",
       });
+    });
+    await waitFor(() => {
+      expect(getPendingThreadExecutionOverride("thread-a")).toBeNull();
+    });
+  });
+
+  it("restores persisted defaults after a same-thread execution save fails", async () => {
+    vi.mocked(sdk.system.executionOptions).mockImplementation(async (args) =>
+      providerExecutionOptionsResponse(args?.providerId),
+    );
+    mocks.updateThreadMutateAsync.mockRejectedValueOnce(
+      new Error("save failed"),
+    );
+    const { result } = renderHook(
+      () =>
+        useThreadCreationOptions({
+          scope: "component-local",
+          resetKey: "thread-a",
+          persistToThreadId: "thread-a",
+          initialProviderId: GLOBAL_PROVIDER_ID,
+          initialModel: "global-default",
+          initialReasoningLevel: "medium",
+          initialServiceTier: "default",
+        }),
+      { wrapper: createQueryClientTestHarness().wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.serviceTier).toBe("default");
+    });
+    act(() => result.current.setServiceTier("fast"));
+    expect(result.current.serviceTier).toBe("fast");
+    await waitFor(() => {
+      expect(result.current.serviceTier).toBe("default");
+    });
+    expect(mocks.updateThreadMutateAsync).toHaveBeenCalledWith({
+      id: "thread-a",
+      serviceTier: "fast",
     });
   });
 

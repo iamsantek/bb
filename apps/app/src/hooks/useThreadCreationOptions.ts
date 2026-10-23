@@ -376,6 +376,10 @@ export function useThreadCreationOptions(
   const [localProvidersUsingDefaults, setLocalProvidersUsingDefaults] =
     useState<ReadonlySet<string>>(() => new Set());
   const touchedThreadFieldsRef = useRef<Set<ThreadPromptField>>(new Set());
+  const previousPendingThreadExecutionOverrideRef = useRef({
+    threadId: persistToThreadId,
+    patch: pendingThreadExecutionOverride,
+  });
   const threadResetKeyRef = useRef<string | number | null | undefined>(
     resetKey,
   );
@@ -385,11 +389,15 @@ export function useThreadCreationOptions(
     () =>
       getInitialThreadPromptSelections({
         initialEnvironmentSelectionValue,
-        initialModel,
+        initialModel:
+          pendingThreadExecutionOverride?.model ?? initialModel,
         initialProviderId,
         initialPermissionMode,
-        initialReasoningLevel,
-        initialServiceTier,
+        initialReasoningLevel:
+          pendingThreadExecutionOverride?.reasoningLevel ??
+          initialReasoningLevel,
+        initialServiceTier:
+          pendingThreadExecutionOverride?.serviceTier ?? initialServiceTier,
       }),
     [
       initialEnvironmentSelectionValue,
@@ -401,6 +409,47 @@ export function useThreadCreationOptions(
       pendingThreadExecutionOverride,
     ],
   );
+  useLayoutEffect(() => {
+    const previous = previousPendingThreadExecutionOverrideRef.current;
+    previousPendingThreadExecutionOverrideRef.current = {
+      threadId: persistToThreadId,
+      patch: pendingThreadExecutionOverride,
+    };
+    if (
+      previous.threadId !== persistToThreadId ||
+      previous.patch === null ||
+      pendingThreadExecutionOverride !== null
+    ) {
+      return;
+    }
+    if ("model" in previous.patch) {
+      touchedThreadFieldsRef.current.delete("selectedModel");
+    }
+    if ("reasoningLevel" in previous.patch) {
+      touchedThreadFieldsRef.current.delete("reasoningLevel");
+    }
+    if ("serviceTier" in previous.patch) {
+      touchedThreadFieldsRef.current.delete("serviceTier");
+    }
+    if (
+      initialProviderId !== undefined &&
+      ("model" in previous.patch || "reasoningLevel" in previous.patch)
+    ) {
+      localProviderSelectionsRef.current.delete(initialProviderId);
+    }
+    setThreadSelections((currentSelections) =>
+      syncUntouchedThreadPromptSelections({
+        currentSelections,
+        nextSelections: nextThreadSelections,
+        touchedFields: touchedThreadFieldsRef.current,
+      }),
+    );
+  }, [
+    initialProviderId,
+    nextThreadSelections,
+    pendingThreadExecutionOverride,
+    persistToThreadId,
+  ]);
   const renderedThreadSelections = useMemo(() => {
     if (!usesLocalThreadSelections) {
       return nextThreadSelections;
