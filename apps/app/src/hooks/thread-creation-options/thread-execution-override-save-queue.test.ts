@@ -67,6 +67,88 @@ describe("thread execution override save queue", () => {
     }
   });
 
+  it("keeps canonical read versions across unmounts while an override is pending", async () => {
+    const threadId = "thread-canonical-read-remount";
+    const canonicalOptions = (model: string) => ({
+      model,
+      serviceTier: "default" as const,
+      reasoningLevel: "medium" as const,
+      permissionMode: "full" as const,
+      source: "client/turn/start" as const,
+    });
+    const firstSave = enqueueThreadExecutionOverrideSave(
+      threadId,
+      { model: "first-model" },
+      async () => undefined,
+      {
+        retainUntilCanonical: true,
+        getCanonicalReadVersion: () =>
+          getThreadExecutionOptionsCanonicalReadVersion(threadId),
+      },
+    );
+    let secondSave: Promise<void> | undefined;
+    let unsubscribe = subscribeToThreadExecutionOptionsCanonicalReadVersion(
+      threadId,
+      vi.fn(),
+    );
+
+    try {
+      await firstSave;
+      expect(recordThreadExecutionOptionsCanonicalRead(threadId)).toBe(1);
+      acknowledgeThreadExecutionOverride(
+        threadId,
+        canonicalOptions("stale-model"),
+        1,
+      );
+      expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+        model: "first-model",
+      });
+
+      secondSave = enqueueThreadExecutionOverrideSave(
+        threadId,
+        { model: "second-model" },
+        async () => undefined,
+        {
+          retainUntilCanonical: true,
+          getCanonicalReadVersion: () =>
+            getThreadExecutionOptionsCanonicalReadVersion(threadId),
+        },
+      );
+      await secondSave;
+      expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+        model: "second-model",
+      });
+
+      unsubscribe();
+      expect(getThreadExecutionOptionsCanonicalReadVersion(threadId)).toBe(1);
+      unsubscribe = subscribeToThreadExecutionOptionsCanonicalReadVersion(
+        threadId,
+        vi.fn(),
+      );
+      expect(getThreadExecutionOptionsCanonicalReadVersion(threadId)).toBe(1);
+
+      expect(recordThreadExecutionOptionsCanonicalRead(threadId)).toBe(2);
+      acknowledgeThreadExecutionOverride(
+        threadId,
+        canonicalOptions("second-model"),
+        2,
+      );
+      expect(getPendingThreadExecutionOverride(threadId)).toBeNull();
+    } finally {
+      unsubscribe();
+      await Promise.allSettled([firstSave, secondSave ?? Promise.resolve()]);
+      const pendingOverride = getPendingThreadExecutionOverride(threadId);
+      if (typeof pendingOverride?.model === "string") {
+        recordThreadExecutionOptionsCanonicalRead(threadId);
+        acknowledgeThreadExecutionOverride(
+          threadId,
+          canonicalOptions(pendingOverride.model),
+          getThreadExecutionOptionsCanonicalReadVersion(threadId) + 1,
+        );
+      }
+    }
+  });
+
   it("serializes rapid changes per thread without blocking another thread", async () => {
     const order: string[] = [];
     let releaseFirst: () => void = () => {};

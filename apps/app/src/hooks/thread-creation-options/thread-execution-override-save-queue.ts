@@ -44,8 +44,13 @@ function notifyThreadExecutionOptionsListeners(threadId: string): void {
   }
 }
 
-function clearCanonicalReadVersionIfUnobserved(threadId: string): void {
-  if (listenersByThreadId.has(threadId)) return;
+function clearCanonicalReadVersionIfUnused(threadId: string): void {
+  if (
+    listenersByThreadId.has(threadId) ||
+    pendingOverridesByThreadId.has(threadId)
+  ) {
+    return;
+  }
   canonicalReadVersionsByThreadId.delete(threadId);
 }
 
@@ -99,7 +104,7 @@ function subscribeToThreadExecutionOptionsListeners(
     listeners.delete(listener);
     if (listeners.size === 0) {
       listenersByThreadId.delete(threadId);
-      clearCanonicalReadVersionIfUnobserved(threadId);
+      clearCanonicalReadVersionIfUnused(threadId);
     }
   };
 }
@@ -226,7 +231,7 @@ function settlePendingOverride(
     Object.keys(nextSuccessfulPatch).length === 0
   ) {
     pendingOverridesByThreadId.delete(threadId);
-    clearCanonicalReadVersionIfUnobserved(threadId);
+    clearCanonicalReadVersionIfUnused(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
       patch: nextPatch,
@@ -282,7 +287,7 @@ export function acknowledgeThreadExecutionOverride(
     Object.keys(nextSuccessfulPatch).length === 0
   ) {
     pendingOverridesByThreadId.delete(threadId);
-    clearCanonicalReadVersionIfUnobserved(threadId);
+    clearCanonicalReadVersionIfUnused(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
       patch: nextPatch,
