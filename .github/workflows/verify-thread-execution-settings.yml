@@ -1,0 +1,344 @@
+name: Verify thread execution settings
+
+on:
+  push:
+    branches:
+      - fix/thread-execution-settings-0.43.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-thread-execution-settings-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-app:
+    if: github.repository == 'iamsantek/bb'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      source_sha: ${{ steps.revision.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Record source revision
+        id: revision
+        shell: bash
+        run: |
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Checked out $checked_out_sha, expected $GITHUB_SHA."
+            exit 1
+          fi
+          printf 'sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          printf 'Source revision: %s\n' "$GITHUB_SHA"
+
+      - name: Measure resources before dependency setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+        with:
+          node-version: "24.x"
+          pnpm-version: "9.15.0"
+          cache-prefix: thread-execution-settings
+          turbo-cache: "false"
+
+      - name: Measure resources before focused app tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Run focused app tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec turbo run test --filter=@bb/app --concurrency=1 --output-logs=new-only -- --maxWorkers=1 \
+            src/hooks/useThreadCreationOptions.test.tsx \
+            src/hooks/thread-creation-options/thread-execution-override-save-queue.test.ts \
+            src/hooks/queries/thread-default-execution-options-query.test.tsx \
+            src/views/thread-detail/ThreadDetailPromptArea.test.tsx \
+            src/components/thread/embedded-chat/EmbeddedThreadChat.test.tsx
+
+      - name: Measure resources before app typecheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Typecheck app
+        run: pnpm exec turbo run typecheck --filter=@bb/app --concurrency=1 --output-logs=new-only
+
+      - name: Measure resources before app lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Lint app
+        run: pnpm exec turbo run lint --filter=@bb/app --concurrency=1 --output-logs=new-only
+
+  package-smoke:
+    if: github.repository == 'iamsantek/bb'
+    needs: focused-app
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      source_sha: ${{ steps.package.outputs.sha }}
+    steps:
+      - name: Checkout verified revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.focused-app.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Record source revision
+        id: revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.focused-app.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$EXPECTED_SHA" || "$GITHUB_SHA" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checked out $checked_out_sha for event $GITHUB_SHA, expected $EXPECTED_SHA."
+            exit 1
+          fi
+          printf 'sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          printf 'Source revision: %s\n' "$GITHUB_SHA"
+
+      - name: Measure resources before dependency setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+        with:
+          node-version: "24.x"
+          pnpm-version: "9.15.0"
+          cache-prefix: thread-execution-settings
+          turbo-cache: "false"
+
+      - name: Measure resources before bb-app smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Smoke bb-app tarball
+        run: pnpm exec turbo run smoke:tarball --filter=bb-app --cache-dir=.turbo/cache --concurrency=1 --output-logs=new-only
+
+      - name: Measure resources before npm pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample_cpu() {
+            awk '/^cpu / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; idle = $5 + $6; print total, idle }' /proc/stat
+          }
+          read -r total_before idle_before < <(sample_cpu)
+          sleep 1
+          read -r total_after idle_after < <(sample_cpu)
+          total_delta=$((total_after - total_before))
+          idle_delta=$((idle_after - idle_before))
+          cores="$(nproc)"
+          available_memory_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+          if [[ ! "$available_memory_kib" =~ ^[0-9]+$ ]] || (( total_delta <= 0 || idle_delta < 0 || cores < 1 )); then
+            echo "::error::Unable to measure available CPU and memory."
+            exit 1
+          fi
+          available_cpu="$(awk -v cores="$cores" -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", cores * idle / total }')"
+          busy_percent="$(awk -v idle="$idle_delta" -v total="$total_delta" 'BEGIN { printf "%.1f", 100 * (1 - idle / total) }')"
+          printf 'Measured cpu_busy_pct=%s free_cpu_equivalent=%s/%s MemAvailableKiB=%s\n' "$busy_percent" "$available_cpu" "$cores" "$available_memory_kib"
+          if ! awk -v value="$available_cpu" 'BEGIN { exit value >= 2 ? 0 : 1 }'; then
+            echo "::error::Requires at least 2 idle-equivalent CPUs."
+            exit 1
+          fi
+          if (( available_memory_kib < 6291456 )); then
+            echo "::error::Requires at least 6 GiB of available memory."
+            exit 1
+          fi
+
+      - name: Pack bb-app
+        id: package
+        shell: bash
+        working-directory: packages/bb-app
+        env:
+          SOURCE_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/thread-execution-settings-$GITHUB_RUN_ID"
+          mkdir -p "$artifact_dir"
+          npm pack --json --pack-destination "$artifact_dir" > "$artifact_dir/pack.json"
+          mapfile -t tarballs < <(find "$artifact_dir" -maxdepth 1 -type f -name 'bb-app-*.tgz' -print)
+          if (( ${#tarballs[@]} != 1 )); then
+            echo "::error::Expected exactly one bb-app tarball, found ${#tarballs[@]}."
+            exit 1
+          fi
+          printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
+          printf 'sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'tarball=%s\n' "${tarballs[0]}" >> "$GITHUB_OUTPUT"
+          printf 'Packed bb-app tarball for %s\n' "$SOURCE_SHA"
+
+      - name: Upload bb-app tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bb-app-smoke-${{ steps.revision.outputs.sha }}
+          path: |
+            ${{ steps.package.outputs.tarball }}
+            ${{ runner.temp }}/thread-execution-settings-${{ github.run_id }}/source-sha.txt
+          if-no-files-found: error
+          retention-days: 7
