@@ -43,6 +43,7 @@ import { getProviderIconInfo } from "@/lib/provider-icon";
 import { fastServiceTierLabel } from "@/lib/reasoning-labels";
 import { threadDefaultExecutionOptionsQueryKey } from "@/hooks/queries/query-keys";
 import {
+  readCachedThreadExecutionOptions,
   threadExecutionOptionsCacheKey,
   writeCachedThreadExecutionOptions,
 } from "@/lib/thread-execution-options-cache";
@@ -87,6 +88,7 @@ import {
 } from "./thread-creation-options/model-catalog-selection";
 import {
   enqueueThreadExecutionOverrideSave,
+  getThreadExecutionOptionsCanonicalReadVersion,
   getPendingThreadExecutionOverride,
   subscribeToPendingThreadExecutionOverride,
 } from "./thread-creation-options/thread-execution-override-save-queue";
@@ -284,25 +286,30 @@ export function useThreadCreationOptions(
         persistToThreadId,
         patch,
         async () => {
+          await queryClient.cancelQueries({ queryKey });
           try {
             await saveThreadExecutionOverride.mutateAsync({
               id: persistToThreadId,
               ...patch,
             });
           } catch (error) {
-            await queryClient.invalidateQueries({
-              queryKey,
-              refetchType: "all",
-            });
+            await queryClient.cancelQueries({ queryKey });
             throw error;
           }
-          queryClient.setQueryData<ResolvedThreadExecutionOptions | null>(
-            queryKey,
-            (current) => {
-              if (current === undefined || current === null) return current;
-              return {
-                ...current,
-                ...(typeof patch.model === "string"
+          await queryClient.cancelQueries({ queryKey });
+          const cachedOptions =
+            queryClient.getQueryData<ResolvedThreadExecutionOptions | null>(
+              queryKey,
+            ) ??
+            readCachedThreadExecutionOptions(
+              threadExecutionOptionsCacheKey(persistToThreadId),
+            );
+          if (cachedOptions !== undefined && cachedOptions !== null) {
+            writeCachedThreadExecutionOptions(
+              threadExecutionOptionsCacheKey(persistToThreadId),
+              {
+                ...cachedOptions,
+                ...(patch.model !== null && patch.model !== undefined
                   ? { model: patch.model }
                   : {}),
                 ...(patch.reasoningLevel !== null &&
@@ -313,22 +320,24 @@ export function useThreadCreationOptions(
                 patch.serviceTier !== undefined
                   ? { serviceTier: patch.serviceTier }
                   : {}),
-              };
-            },
-          );
-          const cachedOptions = queryClient.getQueryData<
-            ResolvedThreadExecutionOptions | null
-          >(queryKey);
-          if (cachedOptions !== undefined && cachedOptions !== null) {
-            writeCachedThreadExecutionOptions(
-              threadExecutionOptionsCacheKey(persistToThreadId),
-              cachedOptions,
+              },
             );
           }
-          await queryClient.invalidateQueries({
-            queryKey,
-            refetchType: "all",
-          });
+        },
+        {
+          retainUntilCanonical: queryClient.getQueryState(queryKey) !== undefined,
+          getCanonicalReadVersion: () =>
+            getThreadExecutionOptionsCanonicalReadVersion(persistToThreadId),
+          onSaved: () => {
+            void queryClient
+              .invalidateQueries({ queryKey, refetchType: "all" })
+              .catch(() => undefined);
+          },
+          onFailed: () => {
+            void queryClient
+              .invalidateQueries({ queryKey, refetchType: "all" })
+              .catch(() => undefined);
+          },
         },
       ).catch(() => undefined);
     },

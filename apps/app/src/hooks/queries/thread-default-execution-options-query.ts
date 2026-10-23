@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { ResolvedThreadExecutionOptions } from "@bb/domain";
 import { sdk } from "@/lib/sdk";
@@ -10,6 +11,11 @@ import { useThreadDetailRealtimeSubscription } from "@/hooks/useRealtimeSubscrip
 import { requireThreadId } from "./query-helpers";
 import { threadDefaultExecutionOptionsQueryKey } from "./query-keys";
 import { REALTIME_OWNED_NO_FOCUS_QUERY_POLICY } from "./query-policies";
+import {
+  acknowledgeThreadExecutionOverride,
+  getThreadExecutionOptionsCanonicalReadVersion,
+  recordThreadExecutionOptionsCanonicalRead,
+} from "../thread-creation-options/thread-execution-override-save-queue";
 
 export {
   allThreadDefaultExecutionOptionsQueryKeyPrefix,
@@ -31,6 +37,7 @@ async function fetchThreadDefaultExecutionOptions(
     signal,
   });
   if (options !== null && !signal?.aborted) {
+    recordThreadExecutionOptionsCanonicalRead(threadId);
     writeCachedThreadExecutionOptions(
       threadExecutionOptionsCacheKey(threadId),
       options,
@@ -46,8 +53,9 @@ export function useThreadDefaultExecutionOptions(
   const enabled = (options?.enabled ?? true) && Boolean(id);
   useThreadDetailRealtimeSubscription(id, { enabled });
 
-  return useQuery<ResolvedThreadExecutionOptions | null>({
-    queryKey: threadDefaultExecutionOptionsQueryKey(id),
+  const queryKey = threadDefaultExecutionOptionsQueryKey(id);
+  const query = useQuery<ResolvedThreadExecutionOptions | null>({
+    queryKey,
     queryFn: ({ signal }) =>
       fetchThreadDefaultExecutionOptions(
         requireThreadId(id, "useThreadDefaultExecutionOptions"),
@@ -64,4 +72,30 @@ export function useThreadDefaultExecutionOptions(
           ) ?? undefined)
         : undefined,
   });
+  const canonicalReadVersion =
+    getThreadExecutionOptionsCanonicalReadVersion(id);
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      query.data === undefined ||
+      query.data === null ||
+      query.isPlaceholderData ||
+      query.isFetching ||
+      !query.isSuccess
+    ) {
+      return;
+    }
+    acknowledgeThreadExecutionOverride(id, query.data, canonicalReadVersion);
+  }, [
+    canonicalReadVersion,
+    enabled,
+    id,
+    query.data,
+    query.isFetching,
+    query.isPlaceholderData,
+    query.isSuccess,
+  ]);
+
+  return query;
 }
