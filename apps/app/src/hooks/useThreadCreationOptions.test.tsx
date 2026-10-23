@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { buildAutoFollowUpRequest } from "@bb/client-core";
 import type {
   SystemExecutionOptionsResponse,
   SystemProviderStatesResponse,
@@ -569,13 +570,13 @@ describe("useThreadCreationOptions", () => {
       await waitFor(() => expect(releaseSaves).toHaveLength(2));
       expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(2, {
         threadId: "thread-a",
-        reasoningLevel: "high",
+        serviceTier: "fast",
       });
       await releaseNextSave();
       await waitFor(() => expect(releaseSaves).toHaveLength(3));
       expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(3, {
         threadId: "thread-a",
-        serviceTier: "fast",
+        reasoningLevel: "high",
       });
       await releaseNextSave();
       await waitFor(() => {
@@ -765,6 +766,284 @@ describe("useThreadCreationOptions", () => {
     }
   });
 
+  it("keeps a successful model when a superseding save fails", async () => {
+    const threadId = "thread-saved-model-before-failure";
+    const catalog = providerExecutionOptionsResponse(GLOBAL_PROVIDER_ID);
+    catalog.models.push({
+      id: "global-next",
+      model: "global-next",
+      displayName: "Global next",
+      description: "",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "medium", description: "" },
+        { reasoningEffort: "high", description: "" },
+      ],
+      defaultReasoningEffort: "medium",
+      isDefault: false,
+    });
+    vi.mocked(sdk.system.executionOptions).mockResolvedValue(catalog);
+
+    const initialOptions = resolvedThreadExecutionOptions();
+    const firstSavedOptions = resolvedThreadExecutionOptions({
+      model: "global-remembered",
+    });
+    const latestSavedOptions = resolvedThreadExecutionOptions({
+      model: "global-remembered",
+      serviceTier: "fast",
+    });
+    writeCachedThreadExecutionOptions(
+      threadExecutionOptionsCacheKey(threadId),
+      initialOptions,
+    );
+
+    const confirmationRead = deferred<ResolvedThreadExecutionOptions | null>();
+    const failureRead = deferred<ResolvedThreadExecutionOptions | null>();
+    const firstModelSave = deferred<ReturnType<typeof makeThreadResponse>>();
+    const secondModelSave = deferred<ReturnType<typeof makeThreadResponse>>();
+    const tierSave = deferred<ReturnType<typeof makeThreadResponse>>();
+    void secondModelSave.promise.catch(() => undefined);
+
+    let defaultOptionsCalls = 0;
+    let confirmationReadSignal: AbortSignal | undefined;
+    let failureReadSignal: AbortSignal | undefined;
+    let confirmationReadResolved = false;
+    let failureReadResolved = false;
+    let firstModelSaveResolved = false;
+    let secondModelSaveRejected = false;
+    let tierSaveResolved = false;
+    let persistedOptions = initialOptions;
+
+    vi.mocked(sdk.threads.defaultExecutionOptions).mockImplementation(
+      ({ signal }) => {
+        defaultOptionsCalls += 1;
+        if (defaultOptionsCalls === 1) return Promise.resolve(initialOptions);
+        if (defaultOptionsCalls === 2) {
+          confirmationReadSignal = signal;
+          return confirmationRead.promise;
+        }
+        if (defaultOptionsCalls === 3) {
+          failureReadSignal = signal;
+          return failureRead.promise;
+        }
+        return Promise.resolve(persistedOptions);
+      },
+    );
+    mocks.updateThreadMutateAsync.mockImplementation(
+      ({
+        threadId: updatedThreadId,
+        ...patch
+      }: {
+        threadId: string;
+        model?: string;
+        reasoningLevel?: "medium" | "high";
+        serviceTier?: "default" | "fast";
+      }) => {
+        expect(updatedThreadId).toBe(threadId);
+        if (patch.model === "global-remembered") {
+          return firstModelSave.promise;
+        }
+        if (patch.model === "global-next") {
+          return secondModelSave.promise;
+        }
+        if (patch.serviceTier === "fast") return tierSave.promise;
+        throw new Error("unexpected thread update");
+      },
+    );
+
+    const { queryClient, wrapper } = createQueryClientTestHarness();
+    const { result } = renderHook(
+      () => useExistingThreadPromptOptions(threadId),
+      { wrapper },
+    );
+
+    const resolveConfirmationRead = () => {
+      confirmationReadResolved = true;
+      confirmationRead.resolve(initialOptions);
+    };
+    const resolveFailureRead = () => {
+      failureReadResolved = true;
+      failureRead.resolve(initialOptions);
+    };
+
+    try {
+      await waitFor(() => {
+        expect(result.current.defaultExecutionOptions.data).toEqual(
+          initialOptions,
+        );
+        expect(result.current.defaultExecutionOptions.isPlaceholderData).toBe(
+          false,
+        );
+        expect(defaultOptionsCalls).toBe(1);
+        expect(
+          result.current.creationOptions.modelOptions.map(
+            (option) => option.value,
+          ),
+        ).toContain("global-next");
+      });
+
+      act(() => {
+        result.current.creationOptions.setSelectedModel("global-remembered");
+      });
+      await waitFor(() => {
+        expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(1);
+      });
+      expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(1, {
+        threadId,
+        model: "global-remembered",
+        reasoningLevel: "medium",
+      });
+
+      act(() => {
+        result.current.creationOptions.setSelectedModel("global-next");
+        result.current.creationOptions.setServiceTier("fast");
+      });
+      expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+        model: "global-next",
+        reasoningLevel: "medium",
+        serviceTier: "fast",
+      });
+      expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        persistedOptions = firstSavedOptions;
+        firstModelSave.resolve(makeThreadResponse());
+      });
+      firstModelSaveResolved = true;
+
+      await waitFor(() => {
+        expect(defaultOptionsCalls).toBe(2);
+        expect(confirmationReadResolved).toBe(false);
+        expect(confirmationReadSignal?.aborted).toBe(true);
+        expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(2);
+        expect(result.current.defaultExecutionOptions.data).toEqual(
+          firstSavedOptions,
+        );
+      });
+      expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(2, {
+        threadId,
+        model: "global-next",
+        reasoningLevel: "medium",
+      });
+
+      secondModelSave.reject(new Error("newer model save failed"));
+      secondModelSaveRejected = true;
+
+      await waitFor(() => {
+        expect(defaultOptionsCalls).toBe(3);
+        expect(failureReadResolved).toBe(false);
+        expect(failureReadSignal?.aborted).toBe(true);
+        expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(3);
+        expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+          serviceTier: "fast",
+        });
+        expect(result.current.defaultExecutionOptions.data).toEqual(
+          firstSavedOptions,
+        );
+        expect(result.current.creationOptions.selectedModel).toBe(
+          "global-remembered",
+        );
+        expect(result.current.creationOptions.reasoningLevel).toBe("medium");
+        expect(result.current.creationOptions.serviceTier).toBe("fast");
+      });
+      expect(
+        result.current.creationOptions.executionInputSources,
+      ).toMatchObject({
+        model: "explicit",
+        reasoningLevel: "explicit",
+        serviceTier: "explicit",
+      });
+      expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(3, {
+        threadId,
+        serviceTier: "fast",
+      });
+
+      expect(
+        buildAutoFollowUpRequest({
+          threadId,
+          input: [{ type: "text", text: "continue", mentions: [] }],
+          execution: {
+            model: result.current.creationOptions.selectedModel,
+            permissionMode: result.current.creationOptions.permissionMode,
+            reasoningLevel: result.current.creationOptions.reasoningLevel,
+            serviceTier: result.current.creationOptions.serviceTier,
+            supportsServiceTier:
+              result.current.creationOptions.supportsServiceTier,
+            executionInputSources:
+              result.current.creationOptions.executionInputSources,
+          },
+        }),
+      ).toMatchObject({
+        id: threadId,
+        model: "global-remembered",
+        reasoningLevel: "medium",
+        serviceTier: "fast",
+        executionInputSources: {
+          model: "explicit",
+          reasoningLevel: "explicit",
+          serviceTier: "explicit",
+        },
+      });
+
+      await act(async () => {
+        persistedOptions = latestSavedOptions;
+        tierSave.resolve(makeThreadResponse());
+      });
+      tierSaveResolved = true;
+
+      await waitFor(() => {
+        expect(result.current.defaultExecutionOptions.data).toEqual(
+          latestSavedOptions,
+        );
+        expect(getPendingThreadExecutionOverride(threadId)).toBeNull();
+      });
+
+      await act(async () => {
+        resolveConfirmationRead();
+        resolveFailureRead();
+      });
+      await waitFor(() => {
+        expect(result.current.defaultExecutionOptions.data).toEqual(
+          latestSavedOptions,
+        );
+        expect(
+          readCachedThreadExecutionOptions(
+            threadExecutionOptionsCacheKey(threadId),
+          ),
+        ).toEqual(latestSavedOptions);
+      });
+      expect(result.current.creationOptions.selectedModel).toBe(
+        "global-remembered",
+      );
+      expect(result.current.creationOptions.serviceTier).toBe("fast");
+    } finally {
+      if (!firstModelSaveResolved) {
+        persistedOptions = firstSavedOptions;
+        firstModelSave.resolve(makeThreadResponse());
+      }
+      if (!secondModelSaveRejected) {
+        secondModelSave.reject(new Error("cleanup model save"));
+      }
+      if (!tierSaveResolved) {
+        persistedOptions = latestSavedOptions;
+        tierSave.resolve(makeThreadResponse());
+      }
+      await act(async () => {
+        await queryClient.cancelQueries({
+          queryKey: threadDefaultExecutionOptionsQueryKey(threadId),
+        });
+        if (!confirmationReadResolved) resolveConfirmationRead();
+        if (!failureReadResolved) resolveFailureRead();
+        await queryClient.invalidateQueries({
+          queryKey: threadDefaultExecutionOptionsQueryKey(threadId),
+          refetchType: "all",
+        });
+      });
+      await waitFor(() => {
+        expect(getPendingThreadExecutionOverride(threadId)).toBeNull();
+      });
+    }
+  });
+
   it("keeps a successful selection over a deferred pre-write defaults response", async () => {
     const threadId = "thread-late-defaults";
     vi.mocked(sdk.system.executionOptions).mockImplementation(async (args) =>
@@ -776,8 +1055,15 @@ describe("useThreadCreationOptions", () => {
       storedOptions,
     );
     const oldDefaults = deferred<ResolvedThreadExecutionOptions | null>();
+    const supersededRefresh = deferred<ResolvedThreadExecutionOptions | null>();
+    const canonicalRefresh = deferred<ResolvedThreadExecutionOptions | null>();
     let oldRequestSignal: AbortSignal | undefined;
+    let supersededRefreshSignal: AbortSignal | undefined;
+    let canonicalRefreshSignal: AbortSignal | undefined;
     let defaultOptionsCalls = 0;
+    let oldDefaultsResolved = false;
+    let supersededRefreshResolved = false;
+    let canonicalRefreshResolved = false;
     let persistedOptions = storedOptions;
     vi.mocked(sdk.threads.defaultExecutionOptions).mockImplementation(
       ({ signal }) => {
@@ -785,6 +1071,14 @@ describe("useThreadCreationOptions", () => {
         if (defaultOptionsCalls === 1) {
           oldRequestSignal = signal;
           return oldDefaults.promise;
+        }
+        if (defaultOptionsCalls === 2) {
+          supersededRefreshSignal = signal;
+          return supersededRefresh.promise;
+        }
+        if (defaultOptionsCalls === 3) {
+          canonicalRefreshSignal = signal;
+          return canonicalRefresh.promise;
         }
         return Promise.resolve(persistedOptions);
       },
@@ -843,10 +1137,19 @@ describe("useThreadCreationOptions", () => {
       expect(oldRequestSignal?.aborted).toBe(true);
 
       await waitFor(() => {
-        expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(2);
+        expect(defaultOptionsCalls).toBe(3);
+        expect(supersededRefreshResolved).toBe(false);
+        expect(supersededRefreshSignal?.aborted).toBe(true);
+        expect(canonicalRefreshResolved).toBe(false);
+        expect(canonicalRefreshSignal?.aborted).toBe(false);
         expect(result.current.defaultExecutionOptions.data).toEqual(
           persistedOptions,
         );
+        expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+          model: "global-remembered",
+          reasoningLevel: "medium",
+          serviceTier: "fast",
+        });
         expect(result.current.creationOptions.selectedModel).toBe(
           "global-remembered",
         );
@@ -859,7 +1162,6 @@ describe("useThreadCreationOptions", () => {
           reasoningLevel: "explicit",
           serviceTier: "explicit",
         });
-        expect(getPendingThreadExecutionOverride(threadId)).toBeNull();
       });
       expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(2, {
         threadId,
@@ -867,7 +1169,18 @@ describe("useThreadCreationOptions", () => {
       });
 
       await act(async () => {
+        canonicalRefreshResolved = true;
+        canonicalRefresh.resolve(persistedOptions);
+      });
+      await waitFor(() => {
+        expect(getPendingThreadExecutionOverride(threadId)).toBeNull();
+      });
+
+      await act(async () => {
+        oldDefaultsResolved = true;
         oldDefaults.resolve(storedOptions);
+        supersededRefreshResolved = true;
+        supersededRefresh.resolve(storedOptions);
       });
       expect(result.current.defaultExecutionOptions.data).toEqual(
         persistedOptions,
@@ -894,7 +1207,18 @@ describe("useThreadCreationOptions", () => {
         await queryClient.cancelQueries({
           queryKey: threadDefaultExecutionOptionsQueryKey(threadId),
         });
-        oldDefaults.resolve(storedOptions);
+        if (!oldDefaultsResolved) {
+          oldDefaultsResolved = true;
+          oldDefaults.resolve(storedOptions);
+        }
+        if (!supersededRefreshResolved) {
+          supersededRefreshResolved = true;
+          supersededRefresh.resolve(storedOptions);
+        }
+        if (!canonicalRefreshResolved) {
+          canonicalRefreshResolved = true;
+          canonicalRefresh.resolve(persistedOptions);
+        }
         await queryClient.invalidateQueries({
           queryKey: threadDefaultExecutionOptionsQueryKey(threadId),
           refetchType: "all",

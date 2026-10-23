@@ -305,22 +305,26 @@ export function useThreadCreationOptions(
               threadExecutionOptionsCacheKey(persistToThreadId),
             );
           if (cachedOptions !== undefined && cachedOptions !== null) {
+            const updatedOptions = {
+              ...cachedOptions,
+              ...(patch.model !== null && patch.model !== undefined
+                ? { model: patch.model }
+                : {}),
+              ...(patch.reasoningLevel !== null &&
+              patch.reasoningLevel !== undefined
+                ? { reasoningLevel: patch.reasoningLevel }
+                : {}),
+              ...(patch.serviceTier !== null && patch.serviceTier !== undefined
+                ? { serviceTier: patch.serviceTier }
+                : {}),
+            };
+            queryClient.setQueryData<ResolvedThreadExecutionOptions | null>(
+              queryKey,
+              updatedOptions,
+            );
             writeCachedThreadExecutionOptions(
               threadExecutionOptionsCacheKey(persistToThreadId),
-              {
-                ...cachedOptions,
-                ...(patch.model !== null && patch.model !== undefined
-                  ? { model: patch.model }
-                  : {}),
-                ...(patch.reasoningLevel !== null &&
-                patch.reasoningLevel !== undefined
-                  ? { reasoningLevel: patch.reasoningLevel }
-                  : {}),
-                ...(patch.serviceTier !== null &&
-                patch.serviceTier !== undefined
-                  ? { serviceTier: patch.serviceTier }
-                  : {}),
-              },
+              updatedOptions,
             );
           }
         },
