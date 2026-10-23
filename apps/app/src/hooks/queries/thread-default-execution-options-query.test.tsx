@@ -10,6 +10,12 @@ import {
 import { sdk } from "@/lib/sdk";
 import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
 import { useThreadDefaultExecutionOptions } from "./thread-default-execution-options-query";
+import {
+  acknowledgeThreadExecutionOverride,
+  enqueueThreadExecutionOverrideSave,
+  getPendingThreadExecutionOverride,
+  getThreadExecutionOptionsCanonicalReadVersion,
+} from "../thread-creation-options/thread-execution-override-save-queue";
 
 vi.mock("@/lib/sdk", () => ({
   sdk: {
@@ -65,6 +71,58 @@ describe("useThreadDefaultExecutionOptions", () => {
         expect.objectContaining({ threadId: "thr_1" }),
       ),
     );
+  });
+
+  it("acknowledges a saved choice after an identical canonical read", async () => {
+    const threadId = "thr-identical-canonical-read";
+    vi.mocked(sdk.threads.defaultExecutionOptions).mockResolvedValue(RESOLVED);
+    const { wrapper } = createQueryClientTestHarness();
+    const { result, unmount } = renderHook(
+      () => useThreadDefaultExecutionOptions(threadId),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data).toBe(RESOLVED));
+    const initialData = result.current.data;
+    const versionBeforeSave =
+      getThreadExecutionOptionsCanonicalReadVersion(threadId);
+    const save = enqueueThreadExecutionOverrideSave(
+      threadId,
+      { model: RESOLVED.model },
+      async () => undefined,
+      {
+        retainUntilCanonical: true,
+        getCanonicalReadVersion: () =>
+          getThreadExecutionOptionsCanonicalReadVersion(threadId),
+      },
+    );
+
+    try {
+      await save;
+      expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+        model: RESOLVED.model,
+      });
+
+      await act(async () => {
+        await result.current.refetch();
+      });
+
+      expect(result.current.data).toBe(initialData);
+      expect(getThreadExecutionOptionsCanonicalReadVersion(threadId)).toBe(
+        versionBeforeSave + 1,
+      );
+      await waitFor(() =>
+        expect(getPendingThreadExecutionOverride(threadId)).toBeNull(),
+      );
+    } finally {
+      unmount();
+      await save.catch(() => undefined);
+      acknowledgeThreadExecutionOverride(
+        threadId,
+        RESOLVED,
+        getThreadExecutionOptionsCanonicalReadVersion(threadId) + 1,
+      );
+    }
   });
 
   it("does not replay one thread's resolution for another", async () => {

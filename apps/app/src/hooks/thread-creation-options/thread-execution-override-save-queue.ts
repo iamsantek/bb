@@ -38,10 +38,15 @@ const pendingOverrideSnapshots = new WeakMap<
 >();
 let nextSaveRevision = 0;
 
-function notifyPendingOverrideListeners(threadId: string): void {
+function notifyThreadExecutionOptionsListeners(threadId: string): void {
   for (const listener of listenersByThreadId.get(threadId) ?? []) {
     listener();
   }
+}
+
+function clearCanonicalReadVersionIfUnobserved(threadId: string): void {
+  if (listenersByThreadId.has(threadId)) return;
+  canonicalReadVersionsByThreadId.delete(threadId);
 }
 
 function copyThreadExecutionOverrideField<
@@ -79,10 +84,11 @@ export function recordThreadExecutionOptionsCanonicalRead(
   if (!pendingOverridesByThreadId.has(threadId)) return 0;
   const nextVersion = (canonicalReadVersionsByThreadId.get(threadId) ?? 0) + 1;
   canonicalReadVersionsByThreadId.set(threadId, nextVersion);
+  notifyThreadExecutionOptionsListeners(threadId);
   return nextVersion;
 }
 
-export function subscribeToPendingThreadExecutionOverride(
+function subscribeToThreadExecutionOptionsListeners(
   threadId: string,
   listener: () => void,
 ): () => void {
@@ -91,8 +97,25 @@ export function subscribeToPendingThreadExecutionOverride(
   listenersByThreadId.set(threadId, listeners);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) listenersByThreadId.delete(threadId);
+    if (listeners.size === 0) {
+      listenersByThreadId.delete(threadId);
+      clearCanonicalReadVersionIfUnobserved(threadId);
+    }
   };
+}
+
+export function subscribeToPendingThreadExecutionOverride(
+  threadId: string,
+  listener: () => void,
+): () => void {
+  return subscribeToThreadExecutionOptionsListeners(threadId, listener);
+}
+
+export function subscribeToThreadExecutionOptionsCanonicalReadVersion(
+  threadId: string,
+  listener: () => void,
+): () => void {
+  return subscribeToThreadExecutionOptionsListeners(threadId, listener);
 }
 
 export function enqueueThreadExecutionOverrideSave<TResult>(
@@ -119,7 +142,7 @@ export function enqueueThreadExecutionOverrideSave<TResult>(
     retainSuccessfulUntilCanonical,
     pendingSaves: (current?.pendingSaves ?? 0) + 1,
   });
-  notifyPendingOverrideListeners(threadId);
+  notifyThreadExecutionOptionsListeners(threadId);
 
   const previous = pendingSavesByThreadId.get(threadId) ?? Promise.resolve();
   const operation = previous.catch(() => undefined).then(save);
@@ -203,7 +226,7 @@ function settlePendingOverride(
     Object.keys(nextSuccessfulPatch).length === 0
   ) {
     pendingOverridesByThreadId.delete(threadId);
-    canonicalReadVersionsByThreadId.delete(threadId);
+    clearCanonicalReadVersionIfUnobserved(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
       patch: nextPatch,
@@ -216,7 +239,7 @@ function settlePendingOverride(
       pendingSaves,
     });
   }
-  notifyPendingOverrideListeners(threadId);
+  notifyThreadExecutionOptionsListeners(threadId);
 }
 
 export function acknowledgeThreadExecutionOverride(
@@ -259,7 +282,7 @@ export function acknowledgeThreadExecutionOverride(
     Object.keys(nextSuccessfulPatch).length === 0
   ) {
     pendingOverridesByThreadId.delete(threadId);
-    canonicalReadVersionsByThreadId.delete(threadId);
+    clearCanonicalReadVersionIfUnobserved(threadId);
   } else {
     pendingOverridesByThreadId.set(threadId, {
       patch: nextPatch,
@@ -271,5 +294,5 @@ export function acknowledgeThreadExecutionOverride(
       pendingSaves: current.pendingSaves,
     });
   }
-  notifyPendingOverrideListeners(threadId);
+  notifyThreadExecutionOptionsListeners(threadId);
 }

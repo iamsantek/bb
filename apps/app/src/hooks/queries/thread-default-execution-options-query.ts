@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { ResolvedThreadExecutionOptions } from "@bb/domain";
 import { sdk } from "@/lib/sdk";
@@ -15,6 +15,7 @@ import {
   acknowledgeThreadExecutionOverride,
   getThreadExecutionOptionsCanonicalReadVersion,
   recordThreadExecutionOptionsCanonicalRead,
+  subscribeToThreadExecutionOptionsCanonicalReadVersion,
 } from "../thread-creation-options/thread-execution-override-save-queue";
 
 export {
@@ -72,8 +73,20 @@ export function useThreadDefaultExecutionOptions(
           ) ?? undefined)
         : undefined,
   });
-  const canonicalReadVersion =
-    getThreadExecutionOptionsCanonicalReadVersion(id);
+  const subscribeToCanonicalReadVersion = useCallback(
+    (listener: () => void) =>
+      subscribeToThreadExecutionOptionsCanonicalReadVersion(id, listener),
+    [id],
+  );
+  const getCanonicalReadVersion = useCallback(
+    () => getThreadExecutionOptionsCanonicalReadVersion(id),
+    [id],
+  );
+  const canonicalReadVersion = useSyncExternalStore(
+    subscribeToCanonicalReadVersion,
+    getCanonicalReadVersion,
+    getCanonicalReadVersion,
+  );
 
   useEffect(() => {
     if (

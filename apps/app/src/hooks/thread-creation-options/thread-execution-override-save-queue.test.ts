@@ -1,11 +1,72 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   acknowledgeThreadExecutionOverride,
   enqueueThreadExecutionOverrideSave,
+  getThreadExecutionOptionsCanonicalReadVersion,
   getPendingThreadExecutionOverride,
+  recordThreadExecutionOptionsCanonicalRead,
+  subscribeToThreadExecutionOptionsCanonicalReadVersion,
 } from "./thread-execution-override-save-queue.js";
 
 describe("thread execution override save queue", () => {
+  it("notifies canonical read subscribers for only the owning thread", async () => {
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const save = enqueueThreadExecutionOverrideSave(
+      "thread-canonical-read-a",
+      { model: "saved-model" },
+      async () => saveGate,
+    );
+    const notifyOwningThread = vi.fn();
+    const notifyOtherThread = vi.fn();
+    const unsubscribeOwningThread =
+      subscribeToThreadExecutionOptionsCanonicalReadVersion(
+        "thread-canonical-read-a",
+        notifyOwningThread,
+      );
+    const unsubscribeOtherThread =
+      subscribeToThreadExecutionOptionsCanonicalReadVersion(
+        "thread-canonical-read-b",
+        notifyOtherThread,
+      );
+
+    try {
+      expect(
+        getPendingThreadExecutionOverride("thread-canonical-read-a"),
+      ).toEqual({
+        model: "saved-model",
+      });
+      expect(
+        getThreadExecutionOptionsCanonicalReadVersion(
+          "thread-canonical-read-a",
+        ),
+      ).toBe(0);
+      expect(
+        recordThreadExecutionOptionsCanonicalRead("thread-canonical-read-a"),
+      ).toBe(1);
+      expect(
+        getThreadExecutionOptionsCanonicalReadVersion(
+          "thread-canonical-read-a",
+        ),
+      ).toBe(1);
+      expect(notifyOwningThread).toHaveBeenCalledTimes(1);
+      expect(notifyOtherThread).not.toHaveBeenCalled();
+
+      releaseSave();
+      await save;
+      expect(getPendingThreadExecutionOverride("thread-canonical-read-a")).toBe(
+        null,
+      );
+    } finally {
+      releaseSave();
+      unsubscribeOwningThread();
+      unsubscribeOtherThread();
+      await save.catch(() => undefined);
+    }
+  });
+
   it("serializes rapid changes per thread without blocking another thread", async () => {
     const order: string[] = [];
     let releaseFirst: () => void = () => {};
