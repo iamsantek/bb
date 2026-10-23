@@ -10,7 +10,11 @@ const OPUS = availableModelFixture({
 });
 const HAIKU = availableModelFixture({ model: "claude-haiku-4-5" });
 const CATALOG = [OPUS, HAIKU];
-const EMPTY = { modelOverride: null, reasoningLevelOverride: null };
+const EMPTY = {
+  modelOverride: null,
+  reasoningLevelOverride: null,
+  serviceTierOverride: null,
+};
 
 const registry = await createTestProviderRegistry();
 
@@ -27,6 +31,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
     ).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: null,
+      serviceTierOverride: null,
     });
   });
 
@@ -54,6 +59,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
     ).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "high",
+      serviceTierOverride: null,
     });
   });
 
@@ -77,6 +83,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
         existing: {
           modelOverride: "claude-opus-4-8",
           reasoningLevelOverride: "max",
+          serviceTierOverride: null,
         },
         patch: { model: "claude-haiku-4-5" },
         models: CATALOG,
@@ -86,6 +93,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
     ).toEqual({
       modelOverride: "claude-haiku-4-5",
       reasoningLevelOverride: "low",
+      serviceTierOverride: null,
     });
   });
 
@@ -95,6 +103,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
         existing: {
           modelOverride: "claude-haiku-4-5",
           reasoningLevelOverride: "high",
+          serviceTierOverride: null,
         },
         patch: { model: "claude-opus-4-8" },
         models: CATALOG,
@@ -104,6 +113,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
     ).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "high",
+      serviceTierOverride: null,
     });
   });
 
@@ -113,6 +123,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
         existing: {
           modelOverride: "claude-opus-4-8",
           reasoningLevelOverride: "high",
+          serviceTierOverride: null,
         },
         patch: { model: null, reasoningLevel: null },
         models: CATALOG,
@@ -141,7 +152,11 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
         providerId: "claude-code",
         fallbackModel: "claude-opus-4-8",
       }),
-    ).toEqual({ modelOverride: null, reasoningLevelOverride: "xhigh" });
+    ).toEqual({
+      modelOverride: null,
+      reasoningLevelOverride: "xhigh",
+      serviceTierOverride: null,
+    });
   });
 
   it("leaves an unspecified field unchanged", () => {
@@ -150,6 +165,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
         existing: {
           modelOverride: "claude-opus-4-8",
           reasoningLevelOverride: "high",
+          serviceTierOverride: null,
         },
         patch: { reasoningLevel: "max" },
         models: CATALOG,
@@ -159,6 +175,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
     ).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "max",
+      serviceTierOverride: null,
     });
   });
 
@@ -174,6 +191,7 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
         existing: {
           modelOverride: "claude-opus-4-8",
           reasoningLevelOverride: "medium",
+          serviceTierOverride: null,
         },
         patch: {},
         models: [narrowedOpus, HAIKU],
@@ -183,6 +201,40 @@ describe("resolveThreadExecutionOverrideUpdate", () => {
     ).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "high",
+      serviceTierOverride: null,
     });
+  });
+
+  it("sets, changes, and clears a service tier override independently", () => {
+    const fast = resolveThreadExecutionOverrideUpdate(registry, {
+      existing: EMPTY,
+      patch: { serviceTier: "fast" },
+      models: CATALOG,
+      providerId: "claude-code",
+      fallbackModel: null,
+    });
+    expect(fast).toEqual({
+      modelOverride: null,
+      reasoningLevelOverride: null,
+      serviceTierOverride: "fast",
+    });
+
+    const standard = resolveThreadExecutionOverrideUpdate(registry, {
+      existing: fast,
+      patch: { serviceTier: "default" },
+      models: CATALOG,
+      providerId: "claude-code",
+      fallbackModel: null,
+    });
+    expect(standard.serviceTierOverride).toBe("default");
+    expect(
+      resolveThreadExecutionOverrideUpdate(registry, {
+        existing: standard,
+        patch: { serviceTier: null },
+        models: CATALOG,
+        providerId: "claude-code",
+        fallbackModel: null,
+      }).serviceTierOverride,
+    ).toBeNull();
   });
 });

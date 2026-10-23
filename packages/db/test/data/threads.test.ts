@@ -272,35 +272,42 @@ describe("threads", () => {
     expect(getThreadExecutionOverride(db, thread.id)).toEqual({
       modelOverride: null,
       reasoningLevelOverride: null,
+      serviceTierOverride: null,
     });
 
     setThreadExecutionOverride(db, {
       threadId: thread.id,
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "high",
+      serviceTierOverride: "fast",
     });
     expect(getThreadExecutionOverride(db, thread.id)).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "high",
+      serviceTierOverride: "fast",
     });
 
     setThreadExecutionOverride(db, {
       threadId: thread.id,
       reasoningLevelOverride: "max",
+      serviceTierOverride: "default",
     });
     expect(getThreadExecutionOverride(db, thread.id)).toEqual({
       modelOverride: "claude-opus-4-8",
       reasoningLevelOverride: "max",
+      serviceTierOverride: "default",
     });
 
     setThreadExecutionOverride(db, {
       threadId: thread.id,
       modelOverride: null,
       reasoningLevelOverride: null,
+      serviceTierOverride: null,
     });
     expect(getThreadExecutionOverride(db, thread.id)).toEqual({
       modelOverride: null,
       reasoningLevelOverride: null,
+      serviceTierOverride: null,
     });
   });
 

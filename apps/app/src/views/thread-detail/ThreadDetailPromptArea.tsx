@@ -634,6 +634,7 @@ export function ThreadDetailPromptArea({
     environmentHostId,
     scope: "component-local",
     resetKey: thread.id,
+    persistToThreadId: thread.id,
     initialProviderId: thread.providerId,
     initialModel:
       modelFallback?.fallbackModel ?? defaultExecutionOptions?.model,

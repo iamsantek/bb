@@ -229,6 +229,44 @@ describe("bb thread update command output", () => {
     });
   });
 
+  it("bb thread update sets and turns off the sticky service tier", async () => {
+    const thread: domain.Thread = fixtures.makeThread({
+      id: "thread-update-service-tier",
+      projectId: "proj-1",
+      providerId: "claude-code",
+      status: "idle",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const get = vi.fn(async () => thread);
+    const patch = vi.fn(async () => thread);
+    stubServerApi({
+      "v1.threads.:id.$get": get,
+      "v1.threads.:id.$patch": patch,
+    });
+
+    await runCommand(
+      ["thread", "update", thread.id, "--service-tier", "fast"],
+      register,
+    );
+    await runCommand(
+      ["thread", "update", thread.id, "--service-tier", "default"],
+      register,
+    );
+
+    expect(patch).toHaveBeenNthCalledWith(1, {
+      param: { id: thread.id },
+      json: { serviceTier: "fast" },
+    });
+    expect(patch).toHaveBeenNthCalledWith(2, {
+      param: { id: thread.id },
+      json: { serviceTier: "default" },
+    });
+    const lines = collectLogLines(vi.mocked(console.log));
+    expect(lines).toContain("Service tier: fast");
+    expect(lines).toContain("Service tier: default");
+  });
+
   it("bb thread update rejects an invalid reasoning level before calling the API", async () => {
     const patch = vi.fn();
     stubServerApi({ "v1.threads.:id.$patch": patch });

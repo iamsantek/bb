@@ -42,6 +42,7 @@ interface ThreadUpdateCommandOptions {
   clearSection?: boolean;
   model?: string;
   reasoningLevel?: string;
+  serviceTier?: string;
   visibility?: string;
 }
 
@@ -131,6 +132,7 @@ interface ThreadUpdateBody {
   parentThreadId?: string | null;
   model?: string;
   reasoningLevel?: ReasoningLevel;
+  serviceTier?: ServiceTier;
   visibility?: ThreadVisibility;
 }
 
@@ -156,6 +158,10 @@ export function registerActionsCommands(
       "--reasoning-level <level>",
       "Set the sticky reasoning level applied on the thread's next turn: low, medium, high, xhigh, max (provider-dependent)",
     )
+    .option(
+      "--service-tier <tier>",
+      "Set the sticky service tier applied on the thread's next turn: fast or default",
+    )
     .option("--visibility <visibility>", "Thread visibility: visible or hidden")
     .action(
       action(
@@ -169,6 +175,7 @@ export function registerActionsCommands(
             throw new Error("Cannot combine --section with --clear-section.");
           }
           const reasoningLevel = parseReasoningLevel(opts.reasoningLevel);
+          const serviceTier = parseServiceTier(opts.serviceTier);
           const visibility =
             opts.visibility === undefined
               ? undefined
@@ -181,10 +188,11 @@ export function registerActionsCommands(
             !opts.title &&
             !opts.model &&
             !reasoningLevel &&
+            !serviceTier &&
             !visibility
           ) {
             throw new Error(
-              "No changes requested. Provide --title, --parent-thread, --clear-parent-thread, --section, --clear-section, --model, --reasoning-level, or --visibility.",
+              "No changes requested. Provide --title, --parent-thread, --clear-parent-thread, --section, --clear-section, --model, --reasoning-level, --service-tier, or --visibility.",
             );
           }
 
@@ -216,6 +224,9 @@ export function registerActionsCommands(
           if (reasoningLevel) {
             body.reasoningLevel = reasoningLevel;
           }
+          if (serviceTier) {
+            body.serviceTier = serviceTier;
+          }
           if (visibility) {
             body.visibility = visibility;
           }
@@ -244,6 +255,9 @@ export function registerActionsCommands(
           }
           if (reasoningLevel) {
             console.log(`Reasoning level: ${reasoningLevel}`);
+          }
+          if (serviceTier) {
+            console.log(`Service tier: ${serviceTier}`);
           }
           if (visibility) {
             console.log(`Visibility: ${visibility}`);

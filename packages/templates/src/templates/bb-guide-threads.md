@@ -283,6 +283,7 @@ Ownership:
     --clear-section                        Remove section assignment
     --model <model>                        Set the sticky model for the next and later turns
     --reasoning-level <level>              Set the sticky reasoning level (provider-dependent)
+    --service-tier <tier>                  Set the sticky service tier: fast or default
     --visibility <visibility>              Set visible or hidden
 
   Clearing a parent inherits the former parent's section unless --section or
@@ -292,6 +293,9 @@ Ownership:
   Model and reasoning updates stay within the thread's current provider. BB
   validates them against that provider's current model catalog, applies them on
   the next turn, and keeps using them on later turns until changed.
+
+  Service-tier updates apply to the next and later turns until changed. Use
+  `--service-tier default` to turn Fast off.
 
   bb thread read [id]                      Mark read
   bb thread unread [id]                    Mark unread

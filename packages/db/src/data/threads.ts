@@ -24,6 +24,7 @@ import type {
   ThreadSearchSourceKind,
   ThreadStatus,
   ThreadVisibility,
+  ServiceTier,
 } from "@bb/domain";
 import {
   evaluateThreadLifecycleEvent,
@@ -1746,6 +1747,7 @@ export function updateThread(
 export interface ThreadExecutionOverride {
   modelOverride: string | null;
   reasoningLevelOverride: ReasoningLevel | null;
+  serviceTierOverride: ServiceTier | null;
 }
 
 export function getThreadExecutionOverride(
@@ -1756,6 +1758,7 @@ export function getThreadExecutionOverride(
     .select({
       modelOverride: threads.modelOverride,
       reasoningLevelOverride: threads.reasoningLevelOverride,
+      serviceTierOverride: threads.serviceTierOverride,
     })
     .from(threads)
     .where(eq(threads.id, id))
@@ -1767,6 +1770,7 @@ export interface SetThreadExecutionOverrideInput {
   threadId: string;
   modelOverride?: string | null;
   reasoningLevelOverride?: ReasoningLevel | null;
+  serviceTierOverride?: ServiceTier | null;
 }
 
 export function setThreadExecutionOverride(
@@ -1779,6 +1783,9 @@ export function setThreadExecutionOverride(
   }
   if ("reasoningLevelOverride" in input) {
     set.reasoningLevelOverride = input.reasoningLevelOverride;
+  }
+  if ("serviceTierOverride" in input) {
+    set.serviceTierOverride = input.serviceTierOverride;
   }
   const updated = db
     .update(threads)

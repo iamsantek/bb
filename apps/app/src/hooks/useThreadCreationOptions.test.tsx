@@ -8,6 +8,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sdk } from "@/lib/sdk";
 import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
+import { makeThreadResponse } from "@/test/fixtures/thread-responses";
 import type { ProviderModelCatalogScope } from "@bb/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import { hostsQueryKey, systemProvidersQueryKey } from "./queries/query-keys";
@@ -23,12 +24,17 @@ const PROJECT_ID = "proj_prompt_defaults";
 const GLOBAL_PROVIDER_ID = "global-provider";
 const PROJECT_PROVIDER_ID = "project-provider";
 
+const mocks = vi.hoisted(() => ({
+  updateThreadMutateAsync: vi.fn(),
+}));
+
 vi.mock("@/lib/sdk", () => ({
   sdk: {
     system: {
       executionOptions: vi.fn(),
       providerStates: vi.fn(),
     },
+    threads: { update: mocks.updateThreadMutateAsync },
   },
 }));
 
@@ -281,6 +287,7 @@ function setProjectScopedValue(baseKey: string, value: string): void {
 
 beforeEach(() => {
   window.sessionStorage.clear();
+  mocks.updateThreadMutateAsync.mockResolvedValue(makeThreadResponse());
   vi.mocked(sdk.system.executionOptions).mockResolvedValue(
     executionOptionsResponse(),
   );
@@ -294,6 +301,177 @@ afterEach(() => {
 });
 
 describe("useThreadCreationOptions", () => {
+  it("persists model, reasoning, and Fast choices by explicit thread owner", async () => {
+    vi.mocked(sdk.system.executionOptions).mockImplementation(async (args) =>
+      providerExecutionOptionsResponse(args?.providerId),
+    );
+    type SavedExecutionOptions = {
+      model?: string;
+      reasoningLevel?: "medium" | "high";
+      serviceTier?: "default" | "fast";
+    };
+    const saved = new Map<string, SavedExecutionOptions>();
+    mocks.updateThreadMutateAsync.mockImplementation(
+      async ({ id, ...patch }: { id: string } & SavedExecutionOptions) => {
+        saved.set(id, { ...saved.get(id), ...patch });
+      },
+    );
+    const { wrapper } = createQueryClientTestHarness();
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string }) => {
+        const execution = saved.get(threadId);
+        return useThreadCreationOptions({
+          scope: "component-local",
+          resetKey: threadId,
+          persistToThreadId: threadId,
+          initialProviderId: GLOBAL_PROVIDER_ID,
+          initialModel: execution?.model ?? "global-default",
+          initialReasoningLevel: execution?.reasoningLevel ?? "medium",
+          initialServiceTier: execution?.serviceTier ?? "default",
+        });
+      },
+      { wrapper, initialProps: { threadId: "thread-a" } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe("global-default");
+    });
+    act(() => {
+      result.current.setSelectedModel("global-remembered");
+      result.current.setReasoningLevel("high");
+      result.current.setServiceTier("fast");
+    });
+    await waitFor(() => {
+      expect(saved.get("thread-a")).toEqual({
+        model: "global-remembered",
+        reasoningLevel: "high",
+        serviceTier: "fast",
+      });
+    });
+
+    rerender({ threadId: "thread-b" });
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe("global-default");
+      expect(result.current.serviceTier).toBe("default");
+    });
+    act(() => result.current.setServiceTier("default"));
+    await waitFor(() => {
+      expect(mocks.updateThreadMutateAsync).toHaveBeenLastCalledWith({
+        id: "thread-b",
+        serviceTier: "default",
+      });
+    });
+
+    rerender({ threadId: "thread-a" });
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe("global-remembered");
+      expect(result.current.reasoningLevel).toBe("high");
+      expect(result.current.serviceTier).toBe("fast");
+    });
+    expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(1, {
+      id: "thread-a",
+      model: "global-remembered",
+      reasoningLevel: "medium",
+    });
+    expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(2, {
+      id: "thread-a",
+      reasoningLevel: "high",
+    });
+    expect(mocks.updateThreadMutateAsync).toHaveBeenNthCalledWith(3, {
+      id: "thread-a",
+      serviceTier: "fast",
+    });
+  });
+
+  it("reuses the latest pending choice when returning to a thread before save completes", async () => {
+    vi.mocked(sdk.system.executionOptions).mockImplementation(async (args) =>
+      providerExecutionOptionsResponse(args?.providerId),
+    );
+    const persisted = new Map<
+      string,
+      {
+        model?: string;
+        reasoningLevel?: "medium" | "high";
+        serviceTier?: "default" | "fast";
+      }
+    >();
+    const releaseSaves: Array<() => void> = [];
+    mocks.updateThreadMutateAsync.mockImplementation(
+      async ({
+        id,
+        ...patch
+      }: {
+        id: string;
+        model?: string;
+        reasoningLevel?: "medium" | "high";
+        serviceTier?: "default" | "fast";
+      }) =>
+        new Promise((resolve) => {
+          releaseSaves.push(() => {
+            persisted.set(id, { ...persisted.get(id), ...patch });
+            resolve(makeThreadResponse());
+          });
+        }),
+    );
+    const { wrapper } = createQueryClientTestHarness();
+    const useOptionsForThread = ({ threadId }: { threadId: string }) => {
+      const saved = persisted.get(threadId);
+      return useThreadCreationOptions({
+        scope: "component-local",
+        resetKey: threadId,
+        persistToThreadId: threadId,
+        initialProviderId: GLOBAL_PROVIDER_ID,
+        initialModel: saved?.model ?? "global-default",
+        initialReasoningLevel: saved?.reasoningLevel ?? "medium",
+        initialServiceTier: saved?.serviceTier ?? "default",
+      });
+    };
+    const first = renderHook(useOptionsForThread, {
+      wrapper,
+      initialProps: { threadId: "thread-a" },
+    });
+
+    await waitFor(() => {
+      expect(first.result.current.selectedModel).toBe("global-default");
+    });
+    act(() => {
+      first.result.current.setSelectedModel("global-remembered");
+      first.result.current.setServiceTier("fast");
+    });
+    await waitFor(() => expect(releaseSaves).toHaveLength(1));
+    first.unmount();
+
+    const otherThread = renderHook(useOptionsForThread, {
+      wrapper,
+      initialProps: { threadId: "thread-b" },
+    });
+    expect(otherThread.result.current.selectedModel).toBe("global-default");
+    expect(otherThread.result.current.serviceTier).toBe("default");
+    otherThread.unmount();
+
+    const returned = renderHook(useOptionsForThread, {
+      wrapper,
+      initialProps: { threadId: "thread-a" },
+    });
+    expect(returned.result.current.selectedModel).toBe("global-remembered");
+    expect(returned.result.current.serviceTier).toBe("fast");
+
+    await act(async () => {
+      releaseSaves[0]?.();
+    });
+    await waitFor(() => expect(releaseSaves).toHaveLength(2));
+    await act(async () => {
+      releaseSaves[1]?.();
+    });
+    await waitFor(() => {
+      expect(persisted.get("thread-a")).toEqual({
+        model: "global-remembered",
+        reasoningLevel: "medium",
+        serviceTier: "fast",
+      });
+    });
+  });
+
   it("keeps the selected remembered provider branded while models load", () => {
     window.localStorage.setItem("bb.promptbox.provider", "codex");
     writeCachedProviderList(

@@ -330,6 +330,7 @@ export async function resolveExistingThreadExecutionPlan(
   const serviceTier = resolveFieldWithDefault<ServiceTier>(
     [
       args.input.serviceTier?.value,
+      thread.serviceTierOverride ?? undefined,
       lastExecution?.serviceTier,
       projectExecution?.serviceTier,
     ],

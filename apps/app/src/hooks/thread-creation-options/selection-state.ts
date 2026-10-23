@@ -42,6 +42,7 @@ export interface UsePromptModelReasoningOptions {
   initialPermissionMode?: PermissionMode;
   initialEnvironmentSelectionValue?: string;
   preferenceProjectId?: string | null;
+  persistToThreadId?: string;
   resolveProviderRouting?: (
     environmentSelectionValue: string,
   ) => SystemProvidersQuery;
@@ -53,6 +54,7 @@ export interface UseNewThreadCreationOptions extends UsePromptModelReasoningOpti
 
 export interface UseComponentLocalCreationOptions extends UsePromptModelReasoningOptions {
   scope: "component-local";
+  persistToThreadId?: string;
 }
 
 interface StoredCreateExecutionValues {

@@ -1456,6 +1456,28 @@ describe("@bb/sdk", () => {
     });
   });
 
+  it("forwards sticky service-tier thread updates", async () => {
+    const queue = createFetchQueue([{ body: { id: "thr_service_tier" } }]);
+    const sdk = createBbSdk({
+      transport: createHttpTransport({
+        baseUrl: "http://bb.test",
+        fetch: queue.fetch,
+        runtime: "node",
+      }),
+    });
+
+    await sdk.threads.update({
+      threadId: "thr_service_tier",
+      serviceTier: "fast",
+    });
+
+    expect(queue.requests[0]).toEqual({
+      bodyText: JSON.stringify({ serviceTier: "fast" }),
+      method: "PATCH",
+      url: "http://bb.test/api/v1/threads/thr_service_tier",
+    });
+  });
+
   it("sends the queued message version when updating its content", async () => {
     const queue = createFetchQueue([{ body: { id: "qmsg_123" } }]);
     const sdk = createBbSdk({

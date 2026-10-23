@@ -619,6 +619,7 @@ export const updateThreadRequestSchema = z
     parentThreadId: z.string().min(1).nullable(),
     model: z.string().min(1).nullable(),
     reasoningLevel: reasoningLevelSchema.nullable(),
+    serviceTier: serviceTierSchema.nullable(),
     visibility: threadVisibilitySchema,
   })
   .partial()
@@ -629,6 +630,7 @@ export const updateThreadRequestSchema = z
       value.parentThreadId !== undefined ||
       value.model !== undefined ||
       value.reasoningLevel !== undefined ||
+      value.serviceTier !== undefined ||
       value.visibility !== undefined,
     "At least one field must be provided",
   );

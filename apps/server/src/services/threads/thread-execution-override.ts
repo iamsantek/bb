@@ -9,6 +9,7 @@ import {
   type AvailableModel,
   type CallerExecutionInputSource,
   type ReasoningLevel,
+  type ServiceTier,
   type Thread,
 } from "@bb/domain";
 import { ApiError } from "../../errors.js";
@@ -21,6 +22,7 @@ import { getSupportedReasoningLevelsForProvider } from "./thread-reasoning-polic
 interface ThreadExecutionOverridePatch {
   model?: string | null;
   reasoningLevel?: ReasoningLevel | null;
+  serviceTier?: ServiceTier | null;
 }
 
 interface ResolveThreadExecutionOverrideUpdateArgs {
@@ -109,7 +111,16 @@ export function resolveThreadExecutionOverrideUpdate(
     nextReasoning = reconcileReasoningLevel(nextReasoning, supportedReasoning);
   }
 
-  return { modelOverride: nextModel, reasoningLevelOverride: nextReasoning };
+  const nextServiceTier =
+    "serviceTier" in patch
+      ? (patch.serviceTier ?? null)
+      : existing.serviceTierOverride;
+
+  return {
+    modelOverride: nextModel,
+    reasoningLevelOverride: nextReasoning,
+    serviceTierOverride: nextServiceTier,
+  };
 }
 
 export async function applyThreadExecutionOverride(
@@ -118,25 +129,53 @@ export async function applyThreadExecutionOverride(
 ): Promise<void> {
   const { thread, patch } = args;
 
-  const models = await loadThreadProviderModels(deps, thread);
-  const existing = getThreadExecutionOverride(deps.db, thread.id) ?? {
-    modelOverride: null,
-    reasoningLevelOverride: null,
-  };
+  if (
+    patch.serviceTier === "fast" &&
+    !deps.providerRegistry.get(thread.providerId)?.info.capabilities
+      .supportsServiceTier
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      `Provider ${thread.providerId} does not support the Fast service tier.`,
+    );
+  }
 
-  const next = resolveThreadExecutionOverrideUpdate(deps.providerRegistry, {
-    existing,
-    patch,
-    models,
-    providerId: thread.providerId,
-    fallbackModel: resolveFallbackModel(deps, thread),
-  });
+  const update: {
+    threadId: string;
+    modelOverride?: string | null;
+    reasoningLevelOverride?: ReasoningLevel | null;
+    serviceTierOverride?: ServiceTier | null;
+  } = { threadId: thread.id };
+  if ("serviceTier" in patch) {
+    update.serviceTierOverride = patch.serviceTier ?? null;
+  }
+  if ("model" in patch || "reasoningLevel" in patch) {
+    const existing = getThreadExecutionOverride(deps.db, thread.id) ?? {
+      modelOverride: null,
+      reasoningLevelOverride: null,
+      serviceTierOverride: null,
+    };
+    const models = await loadThreadProviderModels(deps, thread);
+    const next = resolveThreadExecutionOverrideUpdate(deps.providerRegistry, {
+      existing,
+      patch,
+      models,
+      providerId: thread.providerId,
+      fallbackModel: resolveFallbackModel(deps, thread),
+    });
+    if ("model" in patch) {
+      update.modelOverride = next.modelOverride;
+    }
+    if (
+      "reasoningLevel" in patch ||
+      next.reasoningLevelOverride !== existing.reasoningLevelOverride
+    ) {
+      update.reasoningLevelOverride = next.reasoningLevelOverride;
+    }
+  }
 
-  setThreadExecutionOverride(deps.db, {
-    threadId: thread.id,
-    modelOverride: next.modelOverride,
-    reasoningLevelOverride: next.reasoningLevelOverride,
-  });
+  setThreadExecutionOverride(deps.db, update);
 }
 
 export async function recoverThreadModelOverride(

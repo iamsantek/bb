@@ -1026,6 +1026,7 @@ describe("ThreadDetailPromptArea", () => {
       expect.objectContaining({
         enabled: true,
         environmentId: undefined,
+        persistToThreadId: "thr_1",
         scope: "component-local",
       }),
     );

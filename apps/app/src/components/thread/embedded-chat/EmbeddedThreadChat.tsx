@@ -274,6 +274,9 @@ function EmbeddedThreadChatWithComposer({
     environmentId: composer.executionEnvironmentId,
     environmentHostId: composer.executionEnvironmentHostId,
     resetKey: composer.executionResetKey,
+    ...(composer.executionDefaultsThreadId === threadId
+      ? { persistToThreadId: threadId }
+      : {}),
     initialProviderId: providerId,
     initialModel: defaultExecutionOptions?.model,
     initialServiceTier: defaultExecutionOptions?.serviceTier,

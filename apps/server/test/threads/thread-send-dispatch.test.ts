@@ -7,6 +7,7 @@ import {
   markThreadDeleted,
   setQueuedThreadMessageFailureReason,
   setQueuedThreadMessageGroupBoundary,
+  setThreadExecutionOverride,
 } from "@bb/db";
 import type { EnvironmentRow } from "@bb/db";
 import {
@@ -65,6 +66,7 @@ interface SeedIdleThreadFixtureArgs {
 }
 
 interface SeedProviderThreadFixtureArgs extends SeedIdleThreadFixtureArgs {
+  providerId?: string;
   status?: "active" | "idle" | "starting";
   serviceTier?: ServiceTier;
 }
@@ -90,6 +92,9 @@ function seedProviderThreadFixture(
   const thread = seedThread(args.harness.deps, {
     projectId: project.id,
     environmentId: environment.id,
+    ...(args.providerId === undefined
+      ? {}
+      : { providerId: args.providerId }),
     status: args.status ?? "idle",
   });
   seedThreadRuntimeState(args.harness.deps, {
@@ -1261,6 +1266,43 @@ describe("idle cold-start activation", () => {
 });
 
 describe("service tier execution lifecycle", () => {
+  it("uses saved thread execution choices on the next submitted message", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedProviderThreadFixture({
+        harness,
+        value: 84,
+        providerId: "codex",
+      });
+      setThreadExecutionOverride(harness.db, {
+        threadId: thread.id,
+        modelOverride: "gpt-5.6-sol",
+        reasoningLevelOverride: "high",
+        serviceTierOverride: "fast",
+      });
+
+      await expect(
+        acceptThreadSendRequest(harness.deps, {
+          thread,
+          payload: {
+            input: textInput("send using saved choices"),
+            mode: "start",
+          },
+        }),
+      ).resolves.toMatchObject({ delivery: "sent" });
+      expect(
+        listQueuedThreadCommands(harness, "turn.submit", thread.id),
+      ).toContainEqual(
+        expect.objectContaining({
+          options: expect.objectContaining({
+            model: "gpt-5.6-sol",
+            reasoningLevel: "high",
+            serviceTier: "fast",
+          }),
+        }),
+      );
+    });
+  });
+
   it.each(["fast", "default"] as const)(
     "uses an accepted direct %s choice as the next default",
     async (serviceTier) => {

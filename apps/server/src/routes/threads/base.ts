@@ -388,13 +388,20 @@ export function registerThreadBaseRoutes(app: Hono, deps: AppDeps): void {
       });
     }
 
-    if ("model" in payload || "reasoningLevel" in payload) {
+    if (
+      "model" in payload ||
+      "reasoningLevel" in payload ||
+      "serviceTier" in payload
+    ) {
       await applyThreadExecutionOverride(deps, {
         thread,
         patch: {
           ...("model" in payload ? { model: payload.model } : {}),
           ...("reasoningLevel" in payload
             ? { reasoningLevel: payload.reasoningLevel }
+            : {}),
+          ...("serviceTier" in payload
+            ? { serviceTier: payload.serviceTier }
             : {}),
         },
       });

@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   timelinePanelProps: [] as Array<Record<string, unknown>>,
   timelineProjectIds: [] as Array<string | undefined>,
   resolveMentionLink: vi.fn(),
+  useThreadCreationOptions: vi.fn(),
 }));
 
 const hostDraftMocks = vi.hoisted(() => ({
@@ -183,33 +184,36 @@ vi.mock("@/components/ui/app-toast", () => ({
 }));
 
 vi.mock("@/hooks/useThreadCreationOptions", () => ({
-  useThreadCreationOptions: () => ({
-    executionOptionsRouting: undefined,
-    selectedProviderId: "provider-1",
-    providerOptions: [],
-    hasMultipleProviders: false,
-    selectedProviderDisplayName: "Provider",
-    selectedProviderComposerActions: [],
-    selectedModel: "gpt-5",
-    setSelectedModel: vi.fn(),
-    serviceTier: undefined,
-    setServiceTier: vi.fn(),
-    reasoningLevel: "medium",
-    setReasoningLevel: vi.fn(),
-    permissionMode: "auto",
-    setPermissionMode: vi.fn(),
-    activeModel: { model: "gpt-5" },
-    modelOptions: [],
-    moreModelOptions: [],
-    modelLoadFailed: false,
-    modelLoadError: null,
-    reasoningOptions: [],
-    permissionModeOptions: [],
-    supportsPermissionModeSelection: true,
-    supportsServiceTier: false,
-    serviceTierSupportByProvider: {},
-    isLoadingModels: false,
-  }),
+  useThreadCreationOptions: (options: unknown) => {
+    mocks.useThreadCreationOptions(options);
+    return {
+      executionOptionsRouting: undefined,
+      selectedProviderId: "provider-1",
+      providerOptions: [],
+      hasMultipleProviders: false,
+      selectedProviderDisplayName: "Provider",
+      selectedProviderComposerActions: [],
+      selectedModel: "gpt-5",
+      setSelectedModel: vi.fn(),
+      serviceTier: undefined,
+      setServiceTier: vi.fn(),
+      reasoningLevel: "medium",
+      setReasoningLevel: vi.fn(),
+      permissionMode: "auto",
+      setPermissionMode: vi.fn(),
+      activeModel: { model: "gpt-5" },
+      modelOptions: [],
+      moreModelOptions: [],
+      modelLoadFailed: false,
+      modelLoadError: null,
+      reasoningOptions: [],
+      permissionModeOptions: [],
+      supportsPermissionModeSelection: true,
+      supportsServiceTier: false,
+      serviceTierSupportByProvider: {},
+      isLoadingModels: false,
+    };
+  },
 }));
 
 vi.mock("@/hooks/usePromptMentions", () => ({
@@ -351,10 +355,12 @@ vi.mock("@/hooks/mutations/project-mutations", () => ({
 
 function buildEmbeddedChat({
   threadId = "thr_child",
+  executionDefaultsThreadId = threadId,
   surfaceTone = "background",
   pluginComposerBottomScope,
 }: {
   threadId?: string;
+  executionDefaultsThreadId?: string;
   surfaceTone?: "background" | "sidebar";
   pluginComposerBottomScope?: PluginComposerHost["scope"];
 } = {}) {
@@ -376,7 +382,7 @@ function buildEmbeddedChat({
           projectId: "proj-1",
           threadId,
         },
-        executionDefaultsThreadId: threadId,
+        executionDefaultsThreadId,
         executionResetKey: "thr_parent",
         permissionPolicy: "snapshot",
         environmentSummary: null,
@@ -393,6 +399,21 @@ function renderEmbeddedChat(
 }
 
 describe("EmbeddedThreadChat", () => {
+  it("persists execution choices only when defaults belong to the sent thread", () => {
+    renderEmbeddedChat({ threadId: "thr_child" });
+
+    expect(mocks.useThreadCreationOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({ persistToThreadId: "thr_child" }),
+    );
+
+    renderEmbeddedChat({
+      threadId: "thr_child",
+      executionDefaultsThreadId: "thr_parent",
+    });
+    const options = mocks.useThreadCreationOptions.mock.calls.at(-1)?.[0];
+    expect(options).not.toHaveProperty("persistToThreadId");
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
     mocks.createQueuedMessageMutateAsync.mockReset().mockResolvedValue({});

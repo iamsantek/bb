@@ -1082,6 +1082,7 @@ describe("thread runtime config", () => {
         threadId: thread.id,
         modelOverride: "claude-opus-4-8",
         reasoningLevelOverride: "high",
+        serviceTierOverride: "fast",
       });
 
       const execution = await buildExecutionOptions(
@@ -1091,14 +1092,21 @@ describe("thread runtime config", () => {
       );
       expect(execution.model).toBe("claude-opus-4-8");
       expect(execution.reasoningLevel).toBe("high");
+      expect(execution.serviceTier).toBe("fast");
 
       const oneOff = await buildExecutionOptions(
         harness.deps,
-        { model: "claude-sonnet-4-6", reasoningLevel: "low" },
+        {
+          model: "claude-sonnet-4-6",
+          reasoningLevel: "low",
+          serviceTier: "default",
+        },
         { threadId: thread.id },
       );
       expect(oneOff.model).toBe("claude-sonnet-4-6");
       expect(oneOff.reasoningLevel).toBe("low");
+      expect(oneOff.serviceTier).toBe("default");
+      expect(execution.serviceTier).toBe("fast");
     });
   });
 

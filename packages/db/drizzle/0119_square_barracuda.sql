@@ -1,0 +1,1 @@
+ALTER TABLE `threads` ADD `service_tier_override` text;

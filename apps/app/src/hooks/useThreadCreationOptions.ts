@@ -5,13 +5,16 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   AvailableModel,
   PermissionMode,
   ProviderComposerAction,
   ProviderInfo,
   ProviderModelCatalogScope,
+  ResolvedThreadExecutionOptions,
   ReasoningLevel,
   ServiceTier,
 } from "@bb/domain";
@@ -21,6 +24,7 @@ import type {
   ExistingThreadExecutionInputSources,
   SystemExecutionOptionsModelLoadError,
   SystemProvidersQuery,
+  UpdateThreadRequest,
 } from "@bb/server-contract";
 import {
   PROJECT_CHECKOUT_ENVIRONMENT_PROVIDER_ID,
@@ -37,6 +41,12 @@ import { PERMISSION_MODE_OPTIONS } from "@/lib/permission-mode-options";
 import { useRootComposeReuseEnvironment } from "@/lib/root-compose-selection";
 import { getProviderIconInfo } from "@/lib/provider-icon";
 import { fastServiceTierLabel } from "@/lib/reasoning-labels";
+import { threadDefaultExecutionOptionsQueryKey } from "@/hooks/queries/query-keys";
+import {
+  threadExecutionOptionsCacheKey,
+  writeCachedThreadExecutionOptions,
+} from "@/lib/thread-execution-options-cache";
+import { sdk } from "@/lib/sdk";
 import {
   permissionModeRank,
   providerModelCatalogDependsOnWorkspace,
@@ -75,6 +85,11 @@ import {
   resolveModelCatalogSelection,
   resolveModelReasoningLevel,
 } from "./thread-creation-options/model-catalog-selection";
+import {
+  enqueueThreadExecutionOverrideSave,
+  getPendingThreadExecutionOverride,
+  subscribeToPendingThreadExecutionOverride,
+} from "./thread-creation-options/thread-execution-override-save-queue";
 
 export { formatModelLabel, resolvePermissionModeSelection };
 
@@ -227,10 +242,103 @@ export function useThreadCreationOptions(
     initialServiceTier,
     preferReadyProviderWhenUnset = false,
     preferenceProjectId,
+    persistToThreadId,
     resolveProviderRouting,
     resetKey,
     scope = "new-thread",
   } = options ?? {};
+  const queryClient = useQueryClient();
+  const pendingThreadExecutionOverride = useSyncExternalStore(
+    (listener) =>
+      persistToThreadId
+        ? subscribeToPendingThreadExecutionOverride(
+            persistToThreadId,
+            listener,
+          )
+        : () => {},
+    () =>
+      persistToThreadId
+        ? getPendingThreadExecutionOverride(persistToThreadId)
+        : null,
+    () => null,
+  );
+  const saveThreadExecutionOverride = useMutation({
+    mutationFn: ({
+      id,
+      ...patch
+    }: Pick<UpdateThreadRequest, "model" | "reasoningLevel" | "serviceTier"> & {
+      id: string;
+    }) => sdk.threads.update({ threadId: id, ...patch }),
+    meta: { errorMessage: "Failed to save thread execution settings." },
+  });
+  const persistThreadExecutionOverride = useCallback(
+    (
+      patch: Pick<
+        UpdateThreadRequest,
+        "model" | "reasoningLevel" | "serviceTier"
+      >,
+    ) => {
+      if (scope !== "component-local" || !persistToThreadId) return;
+      const queryKey = threadDefaultExecutionOptionsQueryKey(persistToThreadId);
+      void enqueueThreadExecutionOverrideSave(
+        persistToThreadId,
+        patch,
+        async () => {
+          try {
+            await saveThreadExecutionOverride.mutateAsync({
+              id: persistToThreadId,
+              ...patch,
+            });
+          } catch (error) {
+            await queryClient.invalidateQueries({
+              queryKey,
+              refetchType: "all",
+            });
+            throw error;
+          }
+          queryClient.setQueryData<ResolvedThreadExecutionOptions | null>(
+            queryKey,
+            (current) => {
+              if (current === undefined || current === null) return current;
+              return {
+                ...current,
+                ...(typeof patch.model === "string"
+                  ? { model: patch.model }
+                  : {}),
+                ...(patch.reasoningLevel !== null &&
+                patch.reasoningLevel !== undefined
+                  ? { reasoningLevel: patch.reasoningLevel }
+                  : {}),
+                ...(patch.serviceTier !== null &&
+                patch.serviceTier !== undefined
+                  ? { serviceTier: patch.serviceTier }
+                  : {}),
+              };
+            },
+          );
+          const cachedOptions = queryClient.getQueryData<
+            ResolvedThreadExecutionOptions | null
+          >(queryKey);
+          if (cachedOptions !== undefined && cachedOptions !== null) {
+            writeCachedThreadExecutionOptions(
+              threadExecutionOptionsCacheKey(persistToThreadId),
+              cachedOptions,
+            );
+          }
+          await queryClient.invalidateQueries({
+            queryKey,
+            refetchType: "all",
+          });
+        },
+      ).catch(() => undefined);
+    },
+    [
+      persistToThreadId,
+      queryClient,
+      saveThreadExecutionOverride.mutateAsync,
+      scope,
+    ],
+  );
   const { setValue: setStoredProviderId, value: storedProviderId } =
     usePromptBoxProviderPreference();
   const setStoredProviderModelReasoning =
@@ -249,11 +357,15 @@ export function useThreadCreationOptions(
     useState<ThreadPromptSelections>(() =>
       getInitialThreadPromptSelections({
         initialEnvironmentSelectionValue,
-        initialModel,
+        initialModel:
+          pendingThreadExecutionOverride?.model ?? initialModel,
         initialProviderId,
         initialPermissionMode,
-        initialReasoningLevel,
-        initialServiceTier,
+        initialReasoningLevel:
+          pendingThreadExecutionOverride?.reasoningLevel ??
+          initialReasoningLevel,
+        initialServiceTier:
+          pendingThreadExecutionOverride?.serviceTier ?? initialServiceTier,
       }),
     );
   const [initialReadyProvider, setInitialReadyProvider] =
@@ -286,6 +398,7 @@ export function useThreadCreationOptions(
       initialPermissionMode,
       initialReasoningLevel,
       initialServiceTier,
+      pendingThreadExecutionOverride,
     ],
   );
   const renderedThreadSelections = useMemo(() => {
@@ -715,6 +828,12 @@ export function useThreadCreationOptions(
         setStoredProviderId(providerId);
         return;
       }
+      if (providerId === initialProviderId) {
+        persistThreadExecutionOverride({
+          model,
+          reasoningLevel: nextReasoningLevel,
+        });
+      }
       if (
         effectiveProviderId.length > 0 &&
         effectiveProviderId !== providerId
@@ -743,6 +862,8 @@ export function useThreadCreationOptions(
     },
     [
       effectiveProviderId,
+      initialProviderId,
+      persistThreadExecutionOverride,
       reasoningLevel,
       selectedModel,
       setStoredProviderId,
@@ -775,6 +896,12 @@ export function useThreadCreationOptions(
         });
         return;
       }
+      if (effectiveProviderId === initialProviderId) {
+        persistThreadExecutionOverride({
+          model: value,
+          reasoningLevel: nextReasoningLevel,
+        });
+      }
       setLocalProvidersUsingDefaults((current) => {
         if (!current.has(effectiveProviderId)) return current;
         const next = new Set(current);
@@ -795,6 +922,8 @@ export function useThreadCreationOptions(
       effectiveProviderId,
       executionOptionsQuery.data?.models,
       executionOptionsQuery.data?.selectedOnlyModels,
+      initialProviderId,
+      persistThreadExecutionOverride,
       reasoningLevel,
       setStoredProviderModelReasoning,
       usesStoredCreateSelections,
@@ -814,8 +943,17 @@ export function useThreadCreationOptions(
           value,
         }),
       );
+      if (effectiveProviderId === initialProviderId) {
+        persistThreadExecutionOverride({ serviceTier: value ?? null });
+      }
     },
-    [setStoredServiceTier, usesStoredCreateSelections],
+    [
+      effectiveProviderId,
+      initialProviderId,
+      persistThreadExecutionOverride,
+      setStoredServiceTier,
+      usesStoredCreateSelections,
+    ],
   );
   const setReasoningLevel = useCallback(
     (value: ReasoningLevel) => {
@@ -841,9 +979,14 @@ export function useThreadCreationOptions(
           value,
         }),
       );
+      if (effectiveProviderId === initialProviderId) {
+        persistThreadExecutionOverride({ reasoningLevel: value });
+      }
     },
     [
       effectiveProviderId,
+      initialProviderId,
+      persistThreadExecutionOverride,
       selectedModel,
       setStoredReasoningLevel,
       usesStoredCreateSelections,
