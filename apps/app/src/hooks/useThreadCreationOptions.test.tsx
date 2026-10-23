@@ -947,6 +947,8 @@ describe("useThreadCreationOptions", () => {
         expect(failureReadSignal?.aborted).toBe(true);
         expect(mocks.updateThreadMutateAsync).toHaveBeenCalledTimes(3);
         expect(getPendingThreadExecutionOverride(threadId)).toEqual({
+          model: "global-remembered",
+          reasoningLevel: "medium",
           serviceTier: "fast",
         });
         expect(result.current.defaultExecutionOptions.data).toEqual(
@@ -1369,7 +1371,7 @@ describe("useThreadCreationOptions", () => {
         readCachedThreadExecutionOptions(
           threadExecutionOptionsCacheKey(threadId),
         ),
-      ).toBeUndefined();
+      ).toBeNull();
 
       act(() => {
         result.current.creationOptions.setSelectedModel("global-remembered");
@@ -1445,7 +1447,7 @@ describe("useThreadCreationOptions", () => {
         readCachedThreadExecutionOptions(
           threadExecutionOptionsCacheKey(threadId),
         ),
-      ).toBeUndefined();
+      ).toBeNull();
       expect(
         result.current.creationOptions.executionInputSources,
       ).toMatchObject({
